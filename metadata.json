@@ -1,0 +1,10 @@
+{
+  "name": "Remix ZCtrl",
+  "description": "برنامج وتطبيق شامل لإدارة سيرفرات وأجهزة المايكروتك MikroTik RouterOS، إدارة مستخدمي الهوتسبوت وبروفايلاتهم، توليد الكروت والبطاقات وطباعتها، مراقبة السرعات والجلسات النشطة، والتحكم الكامل بالشبكة.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

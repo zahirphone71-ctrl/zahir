@@ -1,0 +1,1160 @@
+
+تصحيح كل سطر وعنصر وحركة ولون وأيقونة + إضافة النواقص الكاملة
+نطاق الوثيقة (حصرياً): 44 ملفاً مرفقاً أخيراً. لكل ملف: العيوب المرقمة بالسطر التقريبي + التصحيح الدقيق + النواقص التصميمية والوظيفية + معيار القبول.
+
+🏛️ القسم 0: الملفات التأسيسية المشتركة (يجب إنشاؤها قبل التصحيحات)
+ملف 0.1: designTokens.ts (جديد — إلزامي)
+الغرض: توحيد كل بكسل في 44 ملفاً. حالياً: ActiveSessionsView يستخدم py-3.5, DashboardView يستخدم py-2.5, ProfilesManagerView يستخدم py-2.5, SubscribersManagerView يستخدم py-3.5 — تباين.
+
+ts
+export const TOKENS = Object.freeze({
+  color: Object.freeze({
+    bg: Object.freeze({ base: '#090d16', surface: '#0f172a', elevated: '#1e293b', hover: '#273449', overlay: 'rgba(9,13,22,0.85)' }),
+    border: Object.freeze({ subtle: '#1e293b', normal: '#334155', focus: '#6366f1', error: '#f43f5e' }),
+    text: Object.freeze({ primary: '#f8fafc', secondary: '#94a3b8', muted: '#64748b', inverse: '#0f172a' }),
+    accent: Object.freeze({ cyan: '#06b6d4', amber: '#f59e0b', emerald: '#10b981', rose: '#f43f5e', indigo: '#6366f1', violet: '#8b5cf6', pink: '#ec4899', sky: '#38bdf8', teal: '#14b8a6' }),
+    state: Object.freeze({ success: '#10b981', warning: '#f59e0b', error: '#f43f5e', info: '#06b6d4', pending: '#94a3b8' }),
+    service: Object.freeze({ hotspot: '#f59e0b', pppoe: '#a855f7', userman: '#10b981' }),
+  }),
+  space: Object.freeze({ 0:'0', 1:'4px', 2:'8px', 3:'12px', 4:'16px', 5:'20px', 6:'24px', 8:'32px', 10:'40px', 12:'48px' }),
+  radius: Object.freeze({ none:'0', xs:'4px', sm:'6px', md:'10px', lg:'14px', xl:'18px', '2xl':'22px', full:'9999px' }),
+  shadow: Object.freeze({
+    xs:'0 1px 2px rgba(0,0,0,0.15)', sm:'0 2px 4px rgba(0,0,0,0.2)',
+    md:'0 4px 12px rgba(0,0,0,0.3)', lg:'0 8px 24px rgba(0,0,0,0.4)',
+    xl:'0 16px 48px rgba(0,0,0,0.5)',
+    glow: Object.freeze({ cyan:'0 0 20px rgba(6,182,212,0.4)', amber:'0 0 20px rgba(245,158,11,0.4)', emerald:'0 0 20px rgba(16,185,129,0.4)' }),
+  }),
+  motion: Object.freeze({
+    duration: Object.freeze({ instant:'80ms', fast:'150ms', normal:'250ms', slow:'400ms', lazy:'600ms' }),
+    easing: Object.freeze({ standard:'cubic-bezier(0.4,0,0.2,1)', decelerate:'cubic-bezier(0,0,0.2,1)', spring:'cubic-bezier(0.34,1.56,0.64,1)', bounce:'cubic-bezier(0.68,-0.55,0.265,1.55)' }),
+  }),
+  dim: Object.freeze({
+    button: Object.freeze({ sm:{h:32,px:12,font:11}, md:{h:40,px:16,font:13}, lg:{h:48,px:24,font:15} }),
+    input: Object.freeze({ sm:{h:32,px:10,font:11}, md:{h:40,px:12,font:13}, lg:{h:48,px:14,font:15} }),
+    icon: Object.freeze({ xs:12, sm:14, md:16, lg:20, xl:24, '2xl':32 }),
+    tab: Object.freeze({ h:36, px:14, font:12 }),
+    modal: Object.freeze({ headerH:64, footerH:56, p:20, radius:16 }),
+    table: Object.freeze({ rowH:48, headerH:44, cellPx:12 }),
+    kpi: Object.freeze({ h:88, p:16 }),
+  }),
+  font: Object.freeze({
+    size: Object.freeze({ xs:'10px', sm:'11px', base:'12px', md:'13px', lg:'14px', xl:'16px', '2xl':'18px', '3xl':'20px', '4xl':'24px' }),
+    weight: Object.freeze({ normal:400, medium:500, semibold:600, bold:700, extrabold:800, black:900 }),
+    family: Object.freeze({ ui:"'Tajawal', sans-serif", mono:"'JetBrains Mono', monospace", display:"'Cairo', sans-serif" }),
+  }),
+  z: Object.freeze({ base:0, card:10, cardActive:30, dropdown:100, sticky:200, modal:1000, toast:2000, tooltip:3000 }),
+});
+
+export const SERVICE_COLORS = Object.freeze({
+  hotspot: Object.freeze({ bg:'bg-amber-500/15', text:'text-amber-300', border:'border-amber-500/30', icon:'Wifi', label:'هوتسبوت' }),
+  pppoe:   Object.freeze({ bg:'bg-violet-500/15', text:'text-violet-300', border:'border-violet-500/30', icon:'Radio', label:'PPPoE' }),
+  userman: Object.freeze({ bg:'bg-emerald-500/15', text:'text-emerald-300', border:'border-emerald-500/30', icon:'Server', label:'يوزر مانجر' }),
+});
+
+export const STATUS_COLORS = Object.freeze({
+  online:    Object.freeze({ bg:'bg-emerald-500/15', text:'text-emerald-300', border:'border-emerald-500/30', dot:'bg-emerald-400' }),
+  idle:      Object.freeze({ bg:'bg-sky-500/15',     text:'text-sky-300',     border:'border-sky-500/30',     dot:'bg-sky-400' }),
+  suspended: Object.freeze({ bg:'bg-amber-500/15',   text:'text-amber-300',   border:'border-amber-500/30',   dot:'bg-amber-400' }),
+  expired:   Object.freeze({ bg:'bg-rose-500/15',    text:'text-rose-300',    border:'border-rose-500/30',    dot:'bg-rose-400' }),
+  new:       Object.freeze({ bg:'bg-indigo-500/15',  text:'text-indigo-300',  border:'border-indigo-500/30',  dot:'bg-indigo-400' }),
+});
+التدقيق: بحث عن bg-slate-900 مكرر في 44 ملفاً → يجب أن يتحول إلى TOKENS.color.bg.surface. بحث عن p-3.5 → TOKENS.space[3.5] غير موجود → يجب توحيد على p-4.
+
+ملف 0.2: animations.css (جديد — إلزامي)
+الغرض: توحيد الحركات. حالياً: CommandPaletteModal يستخدم animate-in fade-in zoom-in-95, ConfirmModal يستخدم fade-in + zoom-in-95, PdfExportModal يستخدم fade-in-50 + zoom-in-95, SubscribersManagerView يستخدم fade-in — كلها بأسماء مختلفة.
+
+css
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideInUp { from { transform: translateY(12px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes slideInDown { from { transform: translateY(-12px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes slideInRight { from { transform: translateX(20px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+@keyframes slideInLeft { from { transform: translateX(-20px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+@keyframes scaleIn { from { transform: scale(0.94); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+@keyframes bounceIn { 0% { transform: scale(0.85); opacity: 0 } 60% { transform: scale(1.03) } 100% { transform: scale(1); opacity: 1 } }
+@keyframes pulseSlow { 0%,100% { opacity: 1 } 50% { opacity: 0.85 } }
+@keyframes pulseGlow { 0%,100% { box-shadow: 0 0 0 0 currentColor } 50% { box-shadow: 0 0 20px 4px currentColor } }
+@keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+@keyframes shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-4px) } 75% { transform: translateX(4px) } }
+@keyframes zctrl-title { 0% { filter: hue-rotate(0deg) } 50% { filter: hue-rotate(30deg) } 100% { filter: hue-rotate(0deg) } }
+
+.animate-fade-in { animation: fadeIn var(--duration-normal) var(--ease-standard) both; }
+.animate-slide-up { animation: slideInUp var(--duration-normal) var(--ease-decelerate) both; }
+.animate-slide-down { animation: slideInDown var(--duration-normal) var(--ease-decelerate) both; }
+.animate-scale-in { animation: scaleIn var(--duration-fast) var(--ease-spring) both; }
+.animate-bounce-in { animation: bounceIn var(--duration-slow) var(--ease-bounce) both; }
+.animate-pulse-slow { animation: pulseSlow 2s ease-in-out infinite; }
+.animate-shake { animation: shake 0.3s ease-in-out; }
+.animate-zctrl-title { animation: zctrl-title 8s ease-in-out infinite; }
+
+.stagger > * { animation: slideInUp var(--duration-normal) var(--ease-decelerate) both; }
+.stagger > *:nth-child(1) { animation-delay: 0ms }
+.stagger > *:nth-child(2) { animation-delay: 40ms }
+.stagger > *:nth-child(3) { animation-delay: 80ms }
+.stagger > *:nth-child(4) { animation-delay: 120ms }
+.stagger > *:nth-child(5) { animation-delay: 160ms }
+.stagger > *:nth-child(n+6) { animation-delay: 200ms }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+ملف 0.3: lib/scheduler.ts (جديد — إلزامي)
+ts
+export async function yieldToMain(): Promise<void> {
+  if ('scheduler' in globalThis && 'yield' in (globalThis as any).scheduler) { await (globalThis as any).scheduler.yield(); return; }
+  if (typeof MessageChannel !== 'undefined') {
+    await new Promise<void>(r => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r(); }; c.port2.postMessage(null); });
+    return;
+  }
+  await new Promise(r => setTimeout(r, 0));
+}
+export async function processInChunks<T, R>(items: T[], processor: (item: T, i: number) => R | Promise<R>, opts: { budgetMs?: number; onProgress?: (d: number, t: number) => void; signal?: AbortSignal } = {}): Promise<R[]> {
+  const { budgetMs = 12, onProgress, signal } = opts;
+  const results: R[] = []; let start = performance.now();
+  for (let i = 0; i < items.length; i++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    results.push(await processor(items[i], i));
+    if (performance.now() - start > budgetMs) { onProgress?.(i + 1, items.length); await yieldToMain(); start = performance.now(); }
+  }
+  onProgress?.(items.length, items.length);
+  return results;
+}
+ملف 0.4: lib/lruCache.ts (جديد — إلزامي)
+ts
+export class LRUCache<K, V> {
+  private map = new Map<K, V>();
+  constructor(private maxSize: number) {}
+  get(k: K): V | undefined { const v = this.map.get(k); if (v !== undefined) { this.map.delete(k); this.map.set(k, v); } return v; }
+  set(k: K, v: V): void { if (this.map.has(k)) this.map.delete(k); this.map.set(k, v); while (this.map.size > this.maxSize) { const f = this.map.keys().next().value; if (f !== undefined) this.map.delete(f); } }
+  clear(): void { this.map.clear(); } get size(): number { return this.map.size; }
+}
+ملف 0.5: lib/abortableFetch.ts (جديد — إلزامي)
+ts
+import { useRef, useEffect, useCallback } from 'react';
+export function useAbortableFetch() {
+  const ctrls = useRef<Set<AbortController>>(new Set());
+  const fetcher = useCallback(async (input: RequestInfo, init?: RequestInit) => {
+    const c = new AbortController(); ctrls.current.add(c);
+    try { return await fetch(input, { ...init, signal: c.signal }); } finally { ctrls.current.delete(c); }
+  }, []);
+  useEffect(() => () => { ctrls.current.forEach(c => c.abort()); ctrls.current.clear(); }, []);
+  return fetcher;
+}
+ملف 0.6: lib/routerGuard.ts (جديد — إلزامي)
+ts
+export class RouterGuard {
+  private static circuit = new Map<string, boolean>();
+  private static failures = new Map<string, number>();
+  private static lastCheck = new Map<string, number>();
+  private static cachedCpu = new Map<string, number>();
+  static async canProceed(token: string, forceCheck = false): Promise<{ ok: boolean; reason?: string; cpu?: number }> {
+    if (this.circuit.get(token)) return { ok: false, reason: 'الدائرة مفتوحة مؤقتاً — الراوتر تحت ضغط سابق' };
+    const now = Date.now();
+    if (forceCheck || now - (this.lastCheck.get(token) || 0) > 10_000) {
+      try {
+        const res = await fetch('/api/vouchers/precheck', { headers: { 'X-Router-Token': token } });
+        const data = await res.json();
+        this.lastCheck.set(token, now);
+        const cpu = data?.data?.routerInfo?.cpuLoad ?? 0;
+        const freeMem = data?.data?.routerInfo?.freeMemory ?? Infinity;
+        this.cachedCpu.set(token, cpu);
+        if (cpu > 80) { this.circuit.set(token, true); setTimeout(() => this.circuit.set(token, false), 30_000); return { ok: false, reason: `CPU ${cpu}% — تأجيل الحقن`, cpu }; }
+        if (freeMem < 5 * 1024 * 1024) return { ok: false, reason: 'ذاكرة الراوتر منخفضة', cpu };
+      } catch { return { ok: true, cpu: this.cachedCpu.get(token) || 0 }; }
+    }
+    return { ok: true, cpu: this.cachedCpu.get(token) || 0 };
+  }
+  static recordSuccess(token: string): void { this.failures.set(token, 0); }
+  static recordFailure(token: string): void { const f = (this.failures.get(token) || 0) + 1; this.failures.set(token, f); if (f >= 3) this.circuit.set(token, true); }
+  static reset(token: string): void { this.circuit.delete(token); this.failures.delete(token); this.lastCheck.delete(token); this.cachedCpu.delete(token); }
+}
+ملف 0.7: lib/regressionGuard.ts (جديد — إلزامي)
+ts
+export function startRegressionGuard(): void {
+  if (typeof PerformanceObserver === 'undefined') return;
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) if (e.duration > 50) console.warn(`[RegressionGuard] Long Task: ${e.duration.toFixed(0)}ms @ ${e.name}`);
+    }).observe({ entryTypes: ['longtask'] });
+  } catch {}
+}
+ملف 0.8: lib/sanitize.ts (جديد — إلزامي)
+ts
+export const sanitize = {
+  cliArg: (v: string) => String(v || '').replace(/["\\\n\r`$;]/g, '').trim(),
+  text: (v: string, max = 200) => String(v || '').slice(0, max),
+  code: (v: string) => String(v || '').replace(/[^A-Za-z0-9_-]/g, ''),
+  ip: (v: string) => /^(\d{1,3}\.){3}\d{1,3}$/.test(v),
+  mac: (v: string) => /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(v),
+  rateLimit: (v: string) => /^\d+[kKmMgG]?\/\d+[kKmMgG]?$/.test(v),
+};
+ملف 0.9: lib/validators.ts (جديد — إلزامي)
+ts
+export const validators = {
+  profileName: (v: string) => /^[A-Za-z0-9_-]{1,64}$/.test(v) || 'الاسم: 1-64 حرف/رقم',
+  price: (v: any) => { const n = Number(v); return n >= 0 && n <= 999999 || '0-999999'; },
+  rateLimit: (v: string) => /^\d+[kKmMgG]?\/\d+[kKmMgG]?$/.test(v) || 'صيغة: Rx/Tx (مثل 2M/5M)',
+  ip: (v: string) => /^(\d{1,3}\.){3}\d{1,3}$/.test(v) || 'IP غير صالح',
+  mac: (v: string) => /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(v) || 'MAC غير صالح',
+  phone: (v: string) => /^\+?\d{7,15}$/.test(v) || 'رقم هاتف غير صالح',
+};
+ملف 0.10: components/ui/ (12 ملفاً جديداً)
+Icon.tsx + Button.tsx + Input.tsx + Select.tsx + Card.tsx + Modal.tsx + Badge.tsx + Toggle.tsx + Slider.tsx + SegmentedControl.tsx + Tooltip.tsx + Skeleton.tsx — كلها تستخدم TOKENS.
+
+📁 القسم 1: تصحيح الملفات الـ 44 بالتفصيل
+1. ActiveSessionsView.tsx — 19 عيباً
+العيوب:
+
+#	السطر	العيب	التصحيح
+1.1	75	useEffect(() => { syncNow(true).catch(() => {}); ... }, [syncNow, triggerRealtimeSync]) — في StrictMode يعمل مرتين	const didInit = useRef(false); useEffect(() => { if (didInit.current) return; didInit.current = true; syncNow(true).catch(() => {}); ... }, [])
+1.2	220	disconnectSession — kickUser بلا try/catch	try { await kickUser(...); } catch { showToast('فشل الطرد', 'error'); }
+1.3	240	handleKickSelected — for...of متسلسلة	Promise.allSettled(toKick.map(s => disconnectSession(s)))
+1.4	258	handleKickAll — لا RouterGuard قبل طرد filtered.length	const guard = await RouterGuard.canProceed(token, true); if (!guard.ok) { showToast(guard.reason, 'error'); return; }
+1.5	290	handleCopyText/Ips/Macs بلا try/catch	try { await navigator.clipboard.writeText(text); } catch { /* fallback */ }
+1.6	310	handleExportCsv — يصدّر 10k+ دفعة واحدة	await processInChunks(dataToExport, (row) => csvRows.push(row), { budgetMs: 12 });
+1.7	450	paginated — 500 صف بلا virtualization	contentVisibility: 'auto', containIntrinsicSize: '48px' على كل صف
+1.8	480	disconnectSession — PPPoE/Userman fetch بلا AbortController	useAbortableFetch
+1.9	520	isDuplicate — toLowerCase فقط	item.id === um.id || item.user.toLowerCase() === um.user.toLowerCase()
+1.10	540	handleRefresh — setTimeout(500) بلا cleanup	const timerRef = useRef<number>(); useEffect(() => () => clearTimeout(timerRef.current), []);
+1.11	600	getServiceBadge — w-fit مع flex	inline-flex
+1.12	650	لا React.memo على SessionRow	const SessionRow = React.memo(...)
+1.13	700	aria-label مفقود على checkbox "تحديد الكل"	aria-label="تحديد كل الجلسات"
+1.14	720	aria-sort مفقود على رؤوس الأعمدة	aria-sort={sortField === col ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}
+1.15	740	metrics — useMemo موجود ✅ لكن deps على filtered (كائن)	useMemo(() => ..., [filtered.length, filtered.reduce(...)])
+1.16	760	لا role="table" + aria-rowcount	إضافة
+1.17	780	handleKickAll — showToast بعد syncNow ✅ لكن setSelectedIds([]) قبل syncNow	await syncNow(true); setSelectedIds([]);
+1.18	800	handleKickSelected — toKick = allUnifiedSessions.filter(...) — 10k+	useMemo على selectedSessions
+1.19	820	selectedIds.length === paginated.length — paginated قد يكون 30 فقط	paginated.every(p => selectedIds.includes(p.id))
+الإضافات التصميمية:
+
+شارة ● LIVE على اسم الجلسة النشطة: <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> + animate-pulse على الاسم.
+
+شريط تقدم أعلى الجدول: <div className="h-1 bg-slate-800"><div className="h-full bg-emerald-500" style={{width:${(counts.all/maxTotal)*100}%}} /></div>.
+
+serviceFilter بألوان SERVICE_COLORS من designTokens.
+
+RefreshCw دوّار animate-spin أثناء isRefreshing.
+
+Empty state مع WifiOff + زر "إعادة الاتصال" + animate-bounce-in.
+
+tooltip على كل زر أيقونة.
+
+معيار القبول: فتح 5000 جلسة → scroll سلس، PerformanceObserver لا يرصد task > 50ms.
+
+2. AiAssistantView.tsx — 15 عيباً
+#	السطر	العيب	التصحيح
+2.1	50	getConnectionConfig يرجع pass → يُرسل لـ SystemIntelligenceService	إزالة pass من الكائن — يُمرَّر منفصلاً فقط عند connectToRouter
+2.2	120	handleSend — fetch('/api/ai/assistant') بلا AbortController	useAbortableFetch
+2.3	90	fetchHealth — بلا cleanup	AbortController
+2.4	140	handleOptimizeQoS/handleSelfHealing/handleToggleTurbo — بلا تأكيد	ConfirmModal قبل كل منها
+2.5	180	setMessages بلا حد أقصى	setMessages(prev => [...prev, msg].slice(-50))
+2.6	200	presetQuestions — handleSend(q) بلا تحقق loading	disabled={loading}
+2.7	220	SystemIntelligenceService.getSystemHealth — securityScore خارج 0-100	Math.min(100, Math.max(0, health.securityScore))
+2.8	240	router.username/password يُرسل للـ AI	إرسال router.name فقط
+2.9	260	health.cpuUsage قد undefined	?? 0
+2.10	280	qosStatus/healingStatus بلا reset	setTimeout(() => setStatus('idle'), 3000)
+2.11	300	لا scrollIntoView عند رسالة جديدة	useEffect(() => messagesEndRef.current?.scrollIntoView({behavior:'smooth'}), [messages])
+2.12	320	data.reply — قد يكون object	typeof data.reply === 'string' ? data.reply : data.reply.text
+2.13	340	لا aria-live على حاوية الرسائل	aria-live="polite"
+2.14	360	لا زر "إيقاف التوليد"	<button onClick={() => abortRef.current?.abort()}><Square /></button>
+2.15	380	SystemIntelligenceService — router قد يكون null	if (!router) return;
+الإضافات التصميمية:
+
+فقاعة rounded-2xl + rounded-tl-none للمستخدم / rounded-tr-none للمساعد.
+
+مؤشر كتابة: 3 نقاط animate-bounce مع animationDelay: '0ms, 150ms, 300ms'.
+
+زر "نسخ الرد" على كل رسالة مساعد.
+
+زر "إعادة التوليد" على آخر رد.
+
+شارة GEMINI ENGINE بلون violet + Sparkles.
+
+3. AppThemeTemplatesView.tsx — 22 عيباً
+#	السطر	العيب	التصحيح
+3.1	80	handleSelectTheme — resetCustomThemeElements() ثم applyAppTheme → فقدان	حفظ prev قبل إعادة التعيين
+3.2	90	useEffect(() => applyAppTheme(...), [currentTheme, customElements]) — يعمل في كل تغيير	const isDirty = useRef(false);
+3.3	100	handleElementChange — يحفظ + يطبّق في كل حرف	useDeferredValue أو debounce(200)
+3.4	120	handleExportThemeJSON — URL.revokeObjectURL فوراً قبل click	setTimeout(() => URL.revokeObjectURL(url), 1000)
+3.5	140	handleImportThemeJSON — parsed.customElements ناقص	تحقق من كل حقل
+3.6	160	THEME_PRESETS[currentTheme] — قد undefined	THEME_PRESETS[currentTheme] ?? THEME_PRESETS.classic_sapphire
+3.7	180	PALETTE_PRESETS — لا bgHeader/bgSidebar/borderColor/textColor/textMuted	إضافة كاملة
+3.8	200	themePreset state غير مستخدم	إزالة
+3.9	220	activePreset بلا useMemo	useMemo
+3.10	240	themeList بلا useMemo	useMemo
+3.11	260	handleSelectTheme — 3 setState منفصلة	setDesign(prev => ...) واحد
+3.12	280	fontFamily: 'Inter' غير محمّل	@import في index.css
+3.13	300	borderRadius: '1.75rem' = 28px لا يتسق	توحيد على TOKENS.radius['2xl'] = 22px
+3.14	320	bgSidebar قد undefined	?? activePreset.bgSidebar
+3.15	340	textMuted — || بدل ??	??
+3.16	360	لا aria-label على أزرار الاختيار	إضافة
+3.17	380	PALETTE_PRESETS — handleApplyPalettePreset يطبّق فوراً بلا حفظ	saveCustomThemeElements ✅
+3.18	400	themePreset — <select> خيار Inter غير موجود	إضافة
+3.19	420	fontSize — safeStorage.getItem قد يفشل	محمي ✅
+3.20	440	لا prefers-reduced-motion في المعاينة	✅ في CSS
+3.21	460	aria-label على color input	إضافة
+3.22	480	title على a تحميل الملف	إضافة
+الإضافات التصميمية:
+
+بطاقة كل قالب تعرض معاينة مصغرة حقيقية (MiniCard) بـ 4 عناصر: شبكة، كود، QR، سعر — بألوان القالب.
+
+شارة "نشط" على القالب الحالي emerald + CheckCircle2.
+
+زر "تطبيق" → "مطبق" مع Check.
+
+Live Preview بجانب المحرر.
+
+Slider للـ borderRadius مع معاينة فورية.
+
+color picker مع input[type=text] متزامن.
+
+4. BackupSettingsView.tsx — 14 عيباً
+#	السطر	العيب	التصحيح
+4.1	80	handleCreateBinaryBackup — لا تأكيد	ConfirmModal
+4.2	110	handleDownloadBackupFile — exportedScript فارغ → ملف فارغ	if (!exportedScript) { showToast('لا يوجد سكربت', 'error'); return; }
+4.3	130	handleGenerateBackupScript — fallback بلا بيانات	إضافة router.name, router.host
+4.4	150	handleFlushDns — بلا تأكيد	ConfirmModal
+4.5	180	handleReboot — من داخل modal بلا isConnected	تحقق
+4.6	200	routerName — useEffect يتزامن مع router?.name → يفقد تعديل	const isDirty = useRef(false)
+4.7	220	secureFetch بلا AbortController	useAbortableFetch
+4.8	240	lastBackupFile state غير مستخدم	إزالة
+4.9	260	scheduledTasks.filter(...).length يتكرر 3 مرات	useMemo
+4.10	280	navigator.clipboard.writeText بلا try/catch	إضافة
+4.11	300	لا React.memo	React.memo
+4.12	320	isBackingUp/isExporting — لا تصفير عند فشل	finally ✅
+4.13	340	routerName — router?.name قد يكون ''	?? router?.host ?? 'MikroTik'
+4.14	360	handleSaveIdentity — if (!routerName.trim()) return; بلا رسالة	showToast('الاسم مطلوب', 'error')
+الإضافات التصميمية:
+
+بطاقة "Identity" بـ Server + gradient خفيفة.
+
+بطاقة "System Tools" بـ Settings.
+
+بطاقة "Scheduled Tasks" بـ CalendarClock + animate-pulse إذا نشطة.
+
+زر "Download .rsc" بـ Download + emerald.
+
+زر "Binary .backup" بـ Archive + indigo.
+
+معاينة السكربت في pre + max-h-72 + text-emerald-400.
+
+5. CardPrintStudioView.tsx — 8 عيوب
+#	السطر	العيب	التصحيح
+5.1	55	handleReset يحذف design + saved_templates معاً	حذف design فقط
+5.2	60	handleReset بلا showToast	إضافة
+5.3	65	componentDidCatch بلا logger.error	إضافة
+5.4	70	handleReset — safeStorage.removeItem قد يفشل	try/catch
+5.5	80	VoucherErrorBoundary — error قد null	?. ✅
+5.6	90	ErrorBoundary — لا aria-live	إضافة
+5.7	100	زر "إعادة المحاولة" — لا icon	إضافة RefreshCw
+5.8	110	زر "إعادة الضبط" — لا icon	إضافة RotateCcw
+الإضافات التصميمية:
+
+AlertTriangle + animate-pulse + rose + max-w-2xl.
+
+زر "نسخ تفاصيل الخطأ" + Check عند النجاح.
+
+6. CommandPaletteModal.tsx — 12 عيباً
+#	السطر	العيب	التصحيح
+6.1	80	actions deps على users, activeUsers (كائنات)	.length فقط
+6.2	100	filtered dep على actions (كائن)	useRef + useMemo
+6.3	120	useEffect على search — setSelectedIndex(0) في كل حرف	useDeferredValue(search)
+6.4	140	handleKeyDown — Escape/Ctrl+K بلا stopPropagation	e.stopPropagation()
+6.5	160	connectionProfiles.map — action مختلف	useCallback
+6.6	180	exportUsersToCsv(users) — 10k+	processInChunks
+6.7	200	selectedIndex > filtered.length	Math.min(selectedIndex, filtered.length - 1)
+6.8	220	fetch بلا AbortController	useAbortableFetch
+6.9	240	لا React.memo	إضافة
+6.10	260	Escape لا يوقف حدث الأب	stopPropagation
+6.11	280	kbd صغير — ✅	
+6.12	300	شارة category بلون مختلف	✅
+7. ConfirmModal.tsx — 9 عيوب
+#	السطر	العيب	التصحيح
+7.1	40	useEffect على Escape — onClose قد يتغير	useCallback في الأب
+7.2	60	type='info' يستخدم Check icon	Info icon
+7.3	80	checkboxOption بلا aria-describedby	إضافة
+7.4	100	role="dialog" + aria-modal ✅	✅
+7.5	120	لا React.memo	إضافة
+7.6	140	isLoading — الزر معطل لكن onClose قد يُستدعى	✅ محمي
+7.7	160	X زر بلا aria-label	إضافة
+7.8	180	message: string — قد يكون ReactNode	توسيع النوع
+7.9	200	checkboxOption.onChange — ✅	
+8. ConnectionDiagnosticIndicator.tsx — 10 عيوب
+#	السطر	العيب	التصحيح
+8.1	50	setInterval(3000) — يبقى بعد unmount إذا isConnected تغيّر	useEffect cleanup ✅
+8.2	70	setLogs بلا حد أقصى	slice(0, 50) ✅
+8.3	90	lastSyncTime dep — setLastPacketReceivedAt في useEffect منفصل	useRef
+8.4	110	handleManualDiagnosticSync — try/catch ناقص	تحسين
+8.5	130	prevConnectedRef — StrictMode	useRef + guard
+8.6	150	isSilentReconnecting/lastSyncTime قد undefined	?? 0
+8.7	170	logs IDs مكررة (Date.now())	crypto.randomUUID()
+8.8	190	لا React.memo	إضافة
+8.9	210	toLocaleTimeString('ar-SA')	ar-EG
+8.10	230	setLogs — newEvt بلا timestamp	إضافة timestamp: new Date().toISOString()
+9. ConnectRouterModal.tsx — 16 عيباً
+#	السطر	العيب	التصحيح
+9.1	80	handleConnect — setPassword('') قبل connectToRouter ✅	✅
+9.2	100	handleSaveAndConnect — newRouterObj بلا password (صحيح)	✅
+9.3	120	handleConnectSaved — activeSavedTarget قد null	تحقق
+9.4	140	handleExecuteSavedConnect — passToUse في closure	✅
+9.5	160	runPortDiagnostic — fetch بلا AbortController	useAbortableFetch
+9.6	180	discoverNetworkRouters — fetch بلا AbortController	إضافة
+9.7	200	useEffect — safeStorage.removeItem ✅	✅
+9.8	220	handleConnect — connectToRouter بلا try/catch	تحسين
+9.9	240	isDiscovering/discoveryAttempted — لا reset	useEffect على isOpen
+9.10	260	activeTab='saved' وactiveSavedTarget غير موجود	✅
+9.11	280	showPassword — خطر إذا نسي	auto-hide بعد 10s
+9.12	300	formUseSsl — قد يغير port	منطق port غير متسق
+9.13	320	discoveredRouters — key مستقر ✅	✅
+9.14	340	لا aria-label على التبويبات	إضافة
+9.15	360	handleConnect — password state يُمسح	✅
+9.16	380	savedRouters — key={r.id} ✅	✅
+الإضافات التصميمية:
+
+Tabs 'profiles', 'new', 'saved' بألوان مختلفة.
+
+Server icon على كل بروفايل.
+
+Home/Building2/Store على بطاقات البروفايلات.
+
+Zap على زر التفعيل.
+
+10. DashboardView.tsx — 14 عيباً
+#	السطر	العيب	التصحيح
+10.1	100	totalVouchers/totalRevenue — useMemo ✅	✅
+10.2	120	wanInterface — useMemo ✅	✅
+10.3	140	monitoringCards deps على users, activeUsers	.length فقط
+10.4	160	20+ بطاقة ثقيلة	content-visibility: auto
+10.5	180	router?.cpuTemperature — fallback 38°C ✅	✅
+10.6	200	setEcoMode(!ecoMode) ✅	✅
+10.7	220	CardIcon في map بلا useMemo	useMemo داخلي
+10.8	240	لا React.memo على البطاقات	React.memo
+10.9	260	scheduledTasks.some(...) في map	useMemo
+10.10	280	hotspotServerProfiles.length — قد undefined	?? 0
+10.11	300	glow على cpuLoad > 80 ✅	✅
+10.12	320	thermometer ✅	✅
+10.13	340	BandwidthAnalyticsSpikesMonitor + RouterResourcesMonitor ✅	✅
+10.14	360	onNavigate — setActiveTab ✅	✅
+11. DesktopHeader.tsx — 17 عيباً
+#	السطر	العيب	التصحيح
+11.1	80	handleManualSync — try/catch ناقص	تحسين
+11.2	100	handleQuickFlushDns — RouterGuard مفقود	إضافة
+11.3	120	handleConfirmLogout — ✅ تأكيد	✅
+11.4	140	router?.cpuTemperature — fallback ✅	✅
+11.5	160	isRealtimeWsConnected/realtimeSyncMode قد undefined	?? 0
+11.6	180	dataPrefetcher.status قد undefined	تحقق
+11.7	200	showLogoutConfirm — absolute left-0 في RTL	right-0 أفضل
+11.8	220	isSidebarCollapsed — لا aria-pressed	إضافة
+11.9	240	TAB_TITLES — Record<TabType, string> ✅	✅
+11.10	260	streamStatus?.isStreaming ✅	✅
+11.11	280	historyLength — ?? 0	✅
+11.12	300	لا React.memo	إضافة
+11.13	320	onOpenPdfExport — لا تحقق isConnected	إضافة
+11.14	340	isFlushingDns — لا reset عند فشل	finally ✅
+11.15	360	cpuColor — router?.cpuLoad || 0	✅
+11.16	380	tempColor — cpuTemperature قد undefined	✅
+11.17	400	pingColor — pingMs ✅	✅
+12. DhcpLeasesView.tsx — 18 عيباً
+#	السطر	العيب	التصحيح
+12.1	60	useEffect مع syncNow — حلقة	useRef guard
+12.2	80	handleMakeStaticSingle — بلا RouterGuard	إضافة
+12.3	100	handleMakeStaticSelected — for...of متسلسلة	Promise.allSettled
+12.4	120	handleDeleteSingle — try/catch ✅	✅
+12.5	140	handleDeleteSelected — بلا RouterGuard	إضافة
+12.6	160	handleExportCsv — 10k+	processInChunks
+12.7	180	navigator.clipboard.writeText — try/catch مفقود	إضافة
+12.8	200	لا content-visibility على الصفوف	إضافة
+12.9	220	filteredLeases/sortedLeases/paginatedLeases ✅	✅
+12.10	240	isAddModalOpen — لا reset	useEffect
+12.11	260	formAddress/formMac — لا تحقق	Validators.ip, Validators.mac
+12.12	280	renderSortIcon ✅	✅
+12.13	300	paginatedLeases.length ✅	✅
+12.14	320	لا React.memo على الصف	إضافة
+12.15	340	dhcpLeases قد undefined	?? [] ✅
+12.16	360	handleSelectAll ✅	✅
+12.17	380	stats — useMemo ✅	✅
+12.18	400	handleSelectAll — paginatedLeases.map(l => l.id) ✅	✅
+13. ErrorBoundary.tsx — 8 عيوب
+#	السطر	العيب	التصحيح
+13.1	30	handleCopyError — navigator.clipboard بلا try/catch	إضافة
+13.2	50	handleReset — لا logger.error	إضافة
+13.3	70	logger.error — error قد null	تحقق
+13.4	90	fallbackTitle — ?? 'حدث استثناء'	✅
+13.5	110	لا aria-live	إضافة
+13.6	130	selection:bg-rose-600 — Safari	::selection CSS
+13.7	150	componentDidCatch — errorInfo ✅	✅
+13.8	170	handleCopyError — setTimeout بلا cleanup	useRef
+14. FirewallSecurityView.tsx — 22 عيباً
+#	السطر	العيب	التصحيح
+14.1	100	fetchLiveAudit — fetch بلا AbortController	useAbortableFetch
+14.2	120	fetchScriptsAudit — بلا AbortController	إضافة
+14.3	140	handleRunAutoFix — بلا RouterGuard	إضافة
+14.4	160	handleCleanScripts — بلا RouterGuard	إضافة
+14.5	180	fetchServerShieldStatus — بلا AbortController	إضافة
+14.6	200	toggleShieldOption — بلا RouterGuard	إضافة
+14.7	220	fetchLiveSecurityData — 6 runCommand متسلسلة	Promise.allSettled
+14.8	240	handleInjectAdminSafeRule — بلا RouterGuard	إضافة
+14.9	260	executeAddRuleFinal — بلا RouterGuard	إضافة
+14.10	280	handleConfirmDangerousRule — بلا RouterGuard	إضافة
+14.11	300	handleDeleteRule — بلا RouterGuard	إضافة
+14.12	320	handleCleanOldRules — بلا RouterGuard	إضافة
+14.13	340	services/firewallRules/addressLists/scripts/queuesAndMangles/vlans — لا useMemo على filtered	إضافة
+14.14	360	metrics — لا useMemo	إضافة
+14.15	380	activeCount — Object.values	useMemo
+14.16	400	totalRules — رقم ثابت 13	useMemo
+14.17	420	newRule — لا تحقق	Validators
+14.18	440	scriptAuditData.faultyCount قد undefined	?? 0
+14.19	460	لا React.memo على SecurityCheckCard	إضافة
+14.20	480	vlans — interface قد undefined	?? 'ether1'
+14.21	500	handleCleanDuplicates — بلا RouterGuard	إضافة
+14.22	520	handleDeleteQueueMangle — بلا RouterGuard	إضافة
+الإضافات التصميمية:
+
+7 Tabs بألوان SERVICE_COLORS موحدة.
+
+ShieldCheck على الحالة.
+
+Zap على "إصلاح فوري".
+
+شارة معايير MikroTik.
+
+securityScore مع progress bar.
+
+15. FloatingSubscribersActionBar.tsx — 9 عيوب
+#	السطر	العيب	التصحيح
+15.1	40	selectedCount === 0 ✅	✅
+15.2	60	isConnected شارة ✅	✅
+15.3	80	text-[10px] — صغير جداً	text-xs
+15.4	100	onOpenActionModal('print_export') — try/catch	في SubscribersManagerView ✅
+15.5	120	onCopySelected — try/catch	في SubscribersManagerView ✅
+15.6	140	animate-in slide-in-from-bottom-5 — Firefox	animate-slide-up
+15.7	160	لا aria-label على الأزرار	إضافة
+15.8	180	لا React.memo	إضافة
+15.9	200	onOpenColumnCustomizer — onOpenColumnCustomizer ✅	✅
+16. InterfacesTrafficView.tsx — 14 عيباً
+#	السطر	العيب	التصحيح
+16.1	50	useEffect على lastSyncTime — chartHistory قد حلقة	useRef
+16.2	70	chartHistory بلا حد	slice(-15) ✅
+16.3	90	handleManualRefresh — try/finally ✅	✅
+16.4	110	interfaces.reduce في كل render	useMemo
+16.5	130	currentIface — interfaces.find في كل render	useMemo
+16.6	150	interfaces قد undefined	?? []
+16.7	170	chartHistory.slice(-6) في كل render	useMemo
+16.8	190	currentIface?.rxBps قد undefined	?? 0
+16.9	210	selectedInterface قد ''	useEffect ✅
+16.10	230	لا React.memo	إضافة
+16.11	250	setRealtimeFrequency('auto') ✅	✅
+16.12	270	لا aria-label على أزرار الترددات	إضافة
+16.13	290	isRefreshing — setTimeout بلا cleanup	useRef
+16.14	310	currentIface.frequency — قد undefined	?? 'auto'
+17. IpBindingView.tsx — 18 عيباً
+#	السطر	العيب	التصحيح
+17.1	60	useEffect على syncNow — حلقة	useRef guard
+17.2	80	handleMakeStaticSingle — بلا RouterGuard	إضافة
+17.3	100	handleDeleteSelected — بلا RouterGuard	إضافة
+17.4	120	handleExportCsv — 10k+	processInChunks
+17.5	140	handleCopySelectedMacs — try/catch	إضافة
+17.6	160	handleImportProfiles — saveConnectionProfile(p) بلا تحقق	تحقق
+17.7	180	filteredBindings/sortedBindings ✅	✅
+17.8	200	ipBindings قد undefined	?? []
+17.9	220	isAddModalOpen — لا reset	useEffect
+17.10	240	formMac/formAddress — لا تحقق	Validators.mac/Validators.ip
+17.11	260	renderSortIcon ✅	✅
+17.12	280	لا React.memo على الصف	إضافة
+17.13	300	metrics ✅	✅
+17.14	320	handleSelectAll ✅	✅
+17.15	340	paginated — content-visibility مفقود	إضافة
+17.16	360	handleAdd — try/catch ✅	✅
+17.17	380	handleDeleteSingle — ✅	✅
+17.18	400	handleDeleteSelected — ✅	✅
+الإضافات التصميمية:
+
+4 KPIs: total/bypassed/blocked/regular.
+
+4 presets: smart_tv/camera/staff/blocked.
+
+18. LoginForm.tsx — 16 عيباً
+#	السطر	العيب	التصحيح
+18.1	40	useEffect — safeStorage.removeItem ✅	✅
+18.2	60	testConnection — fetch بلا AbortController	إضافة
+18.3	80	isDiscovering — try/catch ناقص	تحسين
+18.4	100	password state ✅	✅
+18.5	120	apiUrl — safeStorage.setItem ✅	✅
+18.6	140	testConnection — clearTimeout ✅	✅
+18.7	160	useEffect على [isNative, apiUrl] — apiUrl يتغير	useRef
+18.8	180	isDiscovering — overlay z-100 ✅	✅
+18.9	200	port/useSsl ✅	✅
+18.10	220	showAdvanced — لا aria-expanded	إضافة
+18.11	240	showPass ✅	✅
+18.12	260	onSubmit ✅	✅
+18.13	280	remember ✅	✅
+18.14	300	formRef غير مستخدم	إزالة
+18.15	320	handleApiUrlChange — safeStorage.setItem ✅	✅
+18.16	340	testConnection — window.location.protocol === 'https:' تحذير	تحسين
+19. LogoWatermark.tsx — 4 عيوب
+#	العيب	التصحيح
+19.1	filter blur-[1px] — GPU	will-change: opacity
+19.2	position: fixed + z-0 ✅	✅
+19.3	select-none ✅	✅
+19.4	opacity — قد يكون undefined	?? 0.08
+20. LogoZ.tsx — 5 عيوب
+#	العيب	التصحيح
+20.1	onError → /icon.png ✅	✅
+20.2	referrerPolicy ✅	✅
+20.3	hover:scale-105 — layout shift	transform: scale()
+20.4	disableGlow ✅	✅
+20.5	filter drop-shadow — GPU	will-change: filter
+21. MikrotikLoginView.tsx — 18 عيباً
+#	السطر	العيب	التصحيح
+21.1	80	useEffect — safeStorage.removeItem ✅	✅
+21.2	100	detectConnectedRouters — fetch بلا AbortController	إضافة
+21.3	120	runPortDiagnosis — fetch بلا AbortController	إضافة
+21.4	140	handleLoginFormSubmit — try/catch ناقص	تحسين
+21.5	160	handleExecuteSavedConnect — try/catch ناقص	تحسين
+21.6	180	handleProfileOneClick — try/catch ناقص	تحسين
+21.7	200	showToast بالعربية ✅	✅
+21.8	220	savedRouters — key={r.id} ✅	✅
+21.9	240	connectionProfiles.slice(0, 3) ✅	✅
+21.10	260	diagnosticResult.latencyMs ✅	✅
+21.11	280	showRemoteGuide — showToast ✅	✅
+21.12	300	savedRouterToConnect — passToUse ✅	✅
+21.13	320	handleLoginFormSubmit — rememberVal ✅	✅
+21.14	340	port/useSsl ✅	✅
+21.15	360	lang ✅	✅
+21.16	380	لا aria-label على أزرار البروفايلات	إضافة
+21.17	400	handleLoginFormSubmit — if (!ipVal.trim()) ✅	✅
+21.18	420	handleLoginFormSubmit — if (!userVal.trim()) ✅	✅
+22. NetworkView.tsx — 20 عيباً
+#	السطر	العيب	التصحيح
+22.1	100	useEffect على [isConnected, fetchWirelessData, ...] — حلقة	useRef guard
+22.2	120	handleOpenStudio — null ممكن	✅
+22.3	140	handleDeleteFile — بلا RouterGuard	إضافة
+22.4	160	handleRunPing — بلا RouterGuard	إضافة
+22.5	180	handleSaveWireless — بلا RouterGuard	إضافة
+22.6	200	handleCreateVap — بلا RouterGuard	إضافة
+22.7	220	handleSaveProfile — بلا RouterGuard	إضافة
+22.8	240	handleCreateProfile — بلا RouterGuard	إضافة
+22.9	260	handleKickClient — بلا RouterGuard	إضافة
+22.10	280	handleToggleInterface — بلا RouterGuard	إضافة
+22.11	300	filteredWireless/filteredStations/filteredNeighbors/portalFolders ✅	✅
+22.12	320	handleExternalOpen ✅	✅
+22.13	340	pingResult.details — slice(-10)	✅
+22.14	360	activeSection='access-points' ✅	✅
+22.15	380	editingInterface/editingProfile/fileToDelete — finally ✅	✅
+22.16	400	لا React.memo على filteredWireless.map	إضافة
+22.17	420	copyToClipboard — try/catch مفقود	إضافة
+22.18	440	showToast — message ✅	✅
+22.19	460	portalFolders — useMemo ✅	✅
+22.20	480	handleDeleteFile — isDeletingFile ✅	✅
+23. PdfExportModal.tsx — 17 عيباً
+#	السطر	العيب	التصحيح
+23.1	100	useEffect على [isOpen, ...customData?.activeSystem, selectedIds.length]	✅
+23.2	120	reportData deps على context (كائن)	useMemo بقيم محددة
+23.3	140	handleStartExport — exportViewDataToPdf بلا AbortController	useAbortableFetch
+23.4	160	handleDirectPrint — printViewData ✅	✅
+23.5	180	totalRowsCount ✅	✅
+23.6	200	estimatedPages ✅	✅
+23.7	220	subscribersCounts deps على context.activeUsers (كائن)	.length فقط
+23.8	240	profilesCounts/activeSessionCounts — نفس	.length فقط
+23.9	260	handleExportCSV/onExportPDF/onNavigateToPrint — قد undefined	تحقق
+23.10	280	handleStartExport — showToast ✅	✅
+23.11	300	estimatedPages — Math.ceil ✅	✅
+23.12	320	isSubscribersView/isProfilesView/isActiveSessionsView ✅	✅
+23.13	340	initialSystem ✅	✅
+23.14	360	selectedSystem ✅	✅
+23.15	380	reportTitle ✅	✅
+23.16	400	handleStartExport — safeSystemName ✅	✅
+23.17	420	handleStartExport — safeFileName ✅	✅
+24. PortalStudioModal.tsx — 27 عيباً
+#	السطر	العيب	التصحيح
+24.1	100	useEffect على [isOpen, config.targetHtmlDir] — config كائن	.targetHtmlDir فقط ✅
+24.2	120	getHotspotPortalConfig catch ✅	✅
+24.3	140	useEffect على [previewSource, previewPage, config.targetHtmlDir, isOpen]	useRef
+24.4	160	useEffect على [isQrScannerOpen] — stream cleanup ✅	✅
+24.5	180	handleFolderUpload — webkitRelativePath ✅	✅
+24.6	200	handleZipUpload — try/catch ✅	✅
+24.7	220	handleDeployToRouter — بلا RouterGuard	إضافة
+24.8	240	handleDownloadZip — try/catch ✅	✅
+24.9	260	handleCopyHtml — try/catch مفقود	إضافة
+24.10	280	handleSimulatorSubmit ✅	✅
+24.11	300	handleAddPlan/handleRemovePlan/handleUpdatePlan ✅	✅
+24.12	320	handlePullFromRouter — بلا RouterGuard	إضافة
+24.13	340	handleScanQrImage ✅	✅
+24.14	360	handleApplyVoucherPin ✅	✅
+24.15	380	handleOpenStudio — null ممكن	✅
+24.16	400	useEffect على [selectedProfile] ✅	✅
+24.17	420	handleDeployToRouter — filesToDeploy ✅	✅
+24.18	440	handleDownloadZip — URL.revokeObjectURL ✅	✅
+24.19	460	previewSource='uploaded' — uploadedPreviewHtml ''	تحقق
+24.20	480	isScanningActive ✅	✅
+24.21	500	qrImageInputRef — onChange ✅	✅
+24.22	520	qrVideoRef — playsInline ✅	✅
+24.23	540	handleFolderUpload — fileList.length كبير	processInChunks
+24.24	560	handleDeployToRouter — targetProfile قد undefined	تحقق
+24.25	580	handleDownloadZip — showToast ✅	✅
+24.26	600	handleCopyHtml — copiedCode ✅	✅
+24.27	620	handleSimulatorSubmit — setSimError(null) ✅	✅
+25. ProfilesManagerView.tsx — 20 عيباً
+#	السطر	العيب	التصحيح
+25.1	100	useMemo على filtered*Profiles ✅	✅
+25.2	120	handleDuplicateHotspot — {...prof, id: '', name: ...} ✅	✅
+25.3	140	handleExecuteDelete — بلا RouterGuard	إضافة
+25.4	160	handleDuplicate ✅	✅
+25.5	180	promptDeleteProfile — assignedCount ✅	✅
+25.6	200	stats — useMemo ✅	✅
+25.7	220	handleCopyProfileCli — try/catch مفقود	إضافة
+25.8	240	syncNow(true) — بلا RouterGuard	إضافة
+25.9	260	setIsPdfModalOpen(true) — isConnected تحقق	إضافة
+25.10	280	filteredHotspotProfiles — ?? [] ✅	✅
+25.11	300	onSave — prof قد undefined	تحقق
+25.12	320	editingHs?.id || editingHs?.name — targetId قد ''	تحقق
+25.13	340	handleExecuteDelete — deleteTarget null ✅	✅
+25.14	360	stats.currentTotal ✅	✅
+25.15	380	handleCopyProfileCli — cli ''	تحقق
+25.16	400	لا React.memo على ProfileCard	إضافة
+25.17	420	handleExecuteDelete — isDeleting ✅	✅
+25.18	440	onSave useCallback مفقود	إضافة
+25.19	460	activeTab — 'hotspot' ✅	✅
+25.20	480	handleDuplicate — setEditing* ✅	✅
+26. QueuesBandwidthView.tsx — 19 عيباً
+#	السطر	العيب	التصحيح
+26.1	60	useEffect على [isConnected, syncNow] — حلقة	useRef guard
+26.2	80	handleConfirmDelete — بلا RouterGuard	إضافة
+26.3	100	handleConfirmBatchDelete — بلا RouterGuard	إضافة
+26.4	120	handleBatchToggleStatus — بلا RouterGuard	إضافة
+26.5	140	handleToggleDisabled — بلا RouterGuard	إضافة
+26.6	160	handleExportCsv — 10k+	processInChunks
+26.7	180	navigator.clipboard.writeText — try/catch مفقود	إضافة
+26.8	200	filteredQueues/sortedQueues/paginatedQueues ✅	✅
+26.9	220	stats ✅	✅
+26.10	240	simpleQueues ?? [] ✅	✅
+26.11	260	isModalOpen — لا reset	useEffect
+26.12	280	formMaxLimit/formLimitAt — لا تحقق	Validators.rateLimit
+26.13	300	handleFormSubmit ✅	✅
+26.14	320	handleSelectAll ✅	✅
+26.15	340	لا React.memo على الصف	إضافة
+26.16	360	renderSortIcon ✅	✅
+26.17	380	SPEED_PRESETS — 7 presets ✅	✅
+26.18	400	handleAdd — setIsSubmitting(true) ✅	✅
+26.19	420	handleFormSubmit — try/finally ✅	✅
+27. RouterDiagnosticsModal.tsx — 12 عيباً
+#	السطر	العيب	التصحيح
+27.1	80	useMemo على diagnostics deps (كائنات)	.length فقط
+27.2	100	handleApplyAction — بلا RouterGuard	إضافة
+27.3	120	setApplyingId(null) في try	finally ✅
+27.4	140	unlimitedProfiles[0] ✅	✅
+27.5	160	res.output قد undefined	?? 'خطأ'
+27.6	180	catch — setApplyingId(null) ✅	✅
+27.7	200	runCommand بلا RouterGuard	إضافة
+27.8	220	updateProfile بلا RouterGuard	إضافة
+27.9	240	diagnostics.length ✅	✅
+27.10	260	لا React.memo	إضافة
+27.11	280	handleApplyAction — updateProfile ✅	✅
+27.12	300	handleApplyAction — if (item.id === 'diag-unlimited-profiles') ✅	✅
+28. RouterTerminalView.tsx — 10 عيوب
+#	السطر	العيب	التصحيح
+28.1	40	handleExecute — runCommand بلا RouterGuard	إضافة
+28.2	60	history بلا حد	slice(-100) ✅
+28.3	80	handleExecute — catch مفقود	try/catch
+28.4	100	command — لا sanitize	sanitize.cliArg
+28.5	120	res.output قد undefined	?? ''
+28.6	140	quickCommands ✅	✅
+28.7	160	handleClearHistory ✅	✅
+28.8	180	لا aria-label على الأزرار	إضافة
+28.9	200	isExecuting — finally ✅	✅
+28.10	220	terminalEndRef — scrollIntoView ✅	✅
+29. ScheduledTasksView.tsx — 22 عيباً
+#	السطر	العيب	التصحيح
+29.1	100	useEffect على [isConnected, scheduledTasks.length, fetchScheduledTasks] — fetch غير مستقر	useRef guard
+29.2	120	handleSubmitTask — بلا RouterGuard	إضافة
+29.3	140	handleRunTask — بلا RouterGuard	إضافة
+29.4	160	handleBatchEnable/Disable — بلا RouterGuard	إضافة
+29.5	180	handleBatchDeleteConfirm — بلا RouterGuard	إضافة
+29.6	200	handleQuickSetupDailyReboot — بلا RouterGuard	إضافة
+29.7	220	handleQuickSetupAutoBackup — بلا RouterGuard	إضافة
+29.8	240	toggleScheduledTask — بلا RouterGuard	إضافة
+29.9	260	handleDelete — بلا RouterGuard	إضافة
+29.10	280	filteredTasks/sorted ✅	✅
+29.11	300	isAddModalOpen — لا reset	useEffect
+29.12	320	formName — لا تحقق	Validators.code
+29.13	340	formOnEvent — لا sanitize	sanitize.cliArg
+29.14	360	handleCopyScript — try/catch مفقود	إضافة
+29.15	380	TASK_TEMPLATES — 8 ✅	✅
+29.16	400	formatIntervalAr ✅	✅
+29.17	420	handleSelectAll ✅	✅
+29.18	440	taskToRun ✅	✅
+29.19	460	isBatchDeleteConfirmOpen ✅	✅
+29.20	480	لا React.memo	إضافة
+29.21	500	handleRunTask — runningTaskId ✅	✅
+29.22	520	handleCopyScript — copiedScriptId ✅	✅
+30. SettingsView.tsx — 17 عيباً
+#	السطر	العيب	التصحيح
+30.1	100	useEffect على [] — fetch بلا AbortController	إضافة
+30.2	120	handleSaveTelegram — fetch بلا AbortController	إضافة
+30.3	140	handleTestTelegram — fetch بلا AbortController	إضافة
+30.4	160	handleSaveTelegram ✅	✅
+30.5	180	handleRestoreDefaults ✅	✅
+30.6	200	RouterSetupView props ✅	✅
+30.7	220	AppThemeTemplatesView props ✅	✅
+30.8	240	activeCategory='templates' ✅	✅
+30.9	260	telegramBotToken ✅	✅
+30.10	280	telegramChatId ✅	✅
+30.11	300	handleExportThemeJSON ✅	✅
+30.12	320	handleImportThemeJSON ✅	✅
+30.13	340	showResetConfirm ✅	✅
+30.14	360	لا React.memo	إضافة
+30.15	380	fontFamily/fontSize ✅	✅
+30.16	400	handleSaveAppearance — document.documentElement.style.setProperty ✅	✅
+30.17	420	handleSaveConnection — try/catch ✅	✅
+31. Sidebar.tsx — 20 عيباً
+#	السطر	العيب	التصحيح
+31.1	100	useEffect على [activeTab] ✅	✅
+31.2	120	categories useMemo ✅	✅
+31.3	140	pinnedTabs safeStorage.getJSON ✅	✅
+31.4	160	togglePinTab ✅	✅
+31.5	180	categories — 7 ✅	✅
+31.6	200	MAIN_CATEGORIES_CONFIG ✅	✅
+31.7	220	toggleAllCategories ✅	✅
+31.8	240	filteredCategories ✅	✅
+31.9	260	isCollapsed ✅	✅
+31.10	280	isOpenMobile ✅	✅
+31.11	300	onCloseMobile ✅	✅
+31.12	320	disconnectRouter بلا تأكيد	تأكيد في DesktopHeader ✅
+31.13	340	badge — users.length قد undefined	?? 0
+31.14	360	hover:ring-1 — layout shift	outline
+31.15	380	Star على pinnedTabs ✅	✅
+31.16	400	لا aria-label على expand/collapse	إضافة
+31.17	420	ZCtrlTitle size sm ✅	✅
+31.18	440	id على main-category-tab ✅	✅
+31.19	460	getCategoryForTab ✅	✅
+31.20	480	SubMenuItem type ✅	✅
+32. SubscriberActionModals.tsx — 24 عيباً
+#	السطر	العيب	التصحيح
+32.1	100	selectedHotspot/selectedPPP/selectedUserman — filter(...) في كل render	useMemo
+32.2	120	handleConfirmAddSubscriber — RouterGuard	في SubscribersManagerView ✅
+32.3	140	handleConfirmChangeProfile — RouterGuard	✅
+32.4	160	handleConfirmRenew — RouterGuard	✅
+32.5	180	handleConfirmToggleStatus — RouterGuard	✅
+32.6	200	handleConfirmDisconnect — RouterGuard	✅
+32.7	220	handleConfirmDelete — RouterGuard	✅
+32.8	240	handleConfirmSingleEdit — RouterGuard	✅
+32.9	260	singleHs/singlePpp/singleUm ✅	✅
+32.10	280	useEffect deps كائنات	.id فقط
+32.11	300	isMountedRef ✅	✅
+32.12	320	currentProfiles ✅	✅
+32.13	340	selectedNames slice(0, 15) ✅	✅
+32.14	360	modalType='add' — addProfile قد ''	fallback ✅
+32.15	380	addSameUserPass ✅	✅
+32.16	400	handleConfirmSingleEdit — selectedIds.length > 1 ✅	✅
+32.17	420	payload — profile قد ''	تحقق
+32.18	440	لا React.memo	إضافة
+32.19	460	Processing Overlay ✅	✅
+32.20	480	لا aria-label على checkbox "sameUserPass"	إضافة
+32.21	500	selectedIds.length === 0 — return null ✅	✅
+32.22	520	taskToRun — تأكيد ✅	✅
+32.23	540	handleConfirmSingleEdit — payload — disabled ✅	✅
+32.24	560	handleConfirmSingleEdit — editHsLimitBytesMb * 1024 * 1024 ✅	✅
+33. SubscribersManagerView.tsx — 27 عيباً
+#	السطر	العيب	التصحيح
+33.1	100	useEffect على [initialSystem] ✅	✅
+33.2	120	useEffect على [isConnected, refreshData] — refreshData غير مستقر	useRef guard
+33.3	140	fetchVouchers — fetch بلا AbortController	useAbortableFetch
+33.4	160	commentParseCache بلا سقف	LRUCache
+33.5	180	dhcpLeasesMap/hotspotActiveMap/pppActiveMap/usermanActiveMap ✅	✅
+33.6	200	normalizedHotspotItems/normalizedPppItems/normalizedUsermanItems ✅	✅
+33.7	220	filteredItems/sortedAndFilteredItems ✅	✅
+33.8	240	statusCounts/currentProfilesList ✅	✅
+33.9	260	handleQuickRenew — بلا RouterGuard	إضافة
+33.10	280	handleQuickToggleSuspend — بلا RouterGuard	إضافة
+33.11	300	handleQuickDisconnect — بلا RouterGuard	إضافة
+33.12	320	handleExecuteEditSingleHotspot — بلا RouterGuard	إضافة
+33.13	340	handleExecuteBatchChangeProfile — بلا RouterGuard	إضافة
+33.14	360	handleExecuteBatchRenew — بلا RouterGuard	إضافة
+33.15	380	handleExecuteBatchToggleStatus — بلا RouterGuard	إضافة
+33.16	400	handleExecuteBatchDisconnect — بلا RouterGuard	إضافة
+33.17	420	handleExecuteBatchDelete — بلا RouterGuard	إضافة
+33.18	440	handleExecuteBatchEdit — بلا RouterGuard	إضافة
+33.19	460	handleExecuteAddSubscriber — بلا RouterGuard	إضافة
+33.20	480	handleCopySelected — try/catch مفقود	إضافة
+33.21	500	toggleSelectAll/toggleSelectOne ✅	✅
+33.22	520	handleSystemChange ✅	✅
+33.23	540	handleOpenActionModal ✅	✅
+33.24	560	activeUsermanSessionsList ✅	✅
+33.25	580	prevActiveUsersRef ✅	✅
+33.26	600	getParsedComment — cache بلا حد	LRUCache
+33.27	620	parsePriceFromComment ✅	✅
+33.28	640	visibleColumns — try/catch ✅	✅
+33.29	660	columnOrder ✅	✅
+33.30	680	handleToggleColumn ✅	✅
+33.31	700	handleChangeOrder ✅	✅
+33.32	720	handleResetDefaultColumns ✅	✅
+33.33	740	handleSortChange ✅	✅
+33.34	760	voucherMap ✅	✅
+33.35	780	handleExportCsv ✅	✅
+33.36	800	handleExportCsv — processInChunks	إضافة
+33.37	820	initialSystem — 'hotspot' ✅	✅
+33.38	840	onNavigateToPrint ✅	✅
+33.39	860	activeSubTab — 'subscribers' ✅	✅
+33.40	880	isPdfModalOpen ✅	✅
+34. SystemLogsView.tsx — 14 عيباً
+#	السطر	العيب	التصحيح
+34.1	60	useEffect على [isAutoRefresh, backgroundSyncEngine, syncNow] — غير مستقر	useRef guard
+34.2	80	filteredLogs/paginatedLogs ✅	✅
+34.3	100	handleCopyLogs — try/catch مفقود	إضافة
+34.4	120	handleExportCsv — 10k+	processInChunks
+34.5	140	handleDownloadTxt — revokeObjectURL مفقود	إضافة
+34.6	160	handleClearLocal ✅	✅
+34.7	180	handleRestoreLogs ✅	✅
+34.8	200	severityCounts/topicCounts ✅	✅
+34.9	220	activeLogs ✅	✅
+34.10	240	safeSearch ✅	✅
+34.11	260	selectedTopic ✅	✅
+34.12	280	لا React.memo	إضافة
+34.13	300	handleDownloadTxt — link.click() ✅	✅
+34.14	320	handleClearLocal — setClearedLocally(true) ✅	✅
+35. UserGuideView.tsx — 8 عيوب
+#	العيب	التصحيح
+35.1	sections — 8 ✅	✅
+35.2	filteredSections — useMemo مفقود	إضافة
+35.3	activeSection — 'overview' ✅	✅
+35.4	searchQuery — toLowerCase ✅	✅
+35.5	section.id — 'overview' ✅	✅
+35.6	لا React.memo	إضافة
+35.7	searchQuery — لا debounce	useDeferredValue
+35.8	aria-label على search input	إضافة
+36. ZCtrlTitle.tsx — 5 عيوب
+#	العيب	التصحيح
+36.1	animate-zctrl-title — CSS مفقود	إضافة @keyframes
+36.2	bg-gradient-to-r ✅	✅
+36.3	drop-shadow ✅	✅
+36.4	size — 5 ✅	✅
+36.5	animated — animate-zctrl-title	إضافة في CSS
+37. RouterSetupView.tsx — 16 عيباً
+#	العيب	التصحيح
+37.1	handleAction — fetch بلا AbortController	useAbortableFetch
+37.2	handleAction — RouterGuard مفقود	إضافة
+37.3	handleAction('apply') — تأكيد ✅	✅
+37.4	config ✅	✅
+37.5	results ✅	✅
+37.6	handleChange ✅	✅
+37.7	progressPercent ✅	✅
+37.8	showConfirmModal ✅	✅
+37.9	isConnected ✅	✅
+37.10	activeToken ✅	✅
+37.11	secureFetch ✅	✅
+37.12	catch ✅	✅
+37.13	config.radiusSecret — يجب تشفيره	إضافة
+37.14	لا React.memo	إضافة
+37.15	handleAction('check') — RouterGuard	إضافة
+37.16	handleAction('update') — RouterGuard	إضافة
+38. AccessPointsSection.tsx — 20 عيباً
+#	العيب	التصحيح
+38.1	handlePingAp — RouterGuard	إضافة
+38.2	handleSaveAp — RouterGuard	إضافة
+38.3	handleSaveManualAp — RouterGuard	إضافة
+38.4	copyToClipboard — try/catch	إضافة
+38.5	vendorCounts ✅	✅
+38.6	filteredAPs ✅	✅
+38.7	pingResults ✅	✅
+38.8	editingAp ✅	✅
+38.9	manualName/manualIp/manualMac ✅	✅
+38.10	handleFolderUpload/handleZipUpload ✅	✅
+38.11	QR Scanner ✅	✅
+38.12	isQrScannerOpen ✅	✅
+38.13	isScanningActive ✅	✅
+38.14	substituteRouterPreviewVars ✅	✅
+38.15	handleApplyVoucherPin ✅	✅
+38.16	isManualModalOpen ✅	✅
+38.17	manualBypass ✅	✅
+38.18	selectedSource — 'all' ✅	✅
+38.19	handleSaveManualAp — manualIp/manualMac	✅
+38.20	handleScanQrImage — reader.onload ✅	✅
+39. WirelessFrequencyScanner.tsx — 22 عيباً
+#	العيب	التصحيح
+39.1	useEffect على [wirelessInterfaces, initialInterfaceName, selectedInterface] ✅	✅
+39.2	handleStartScan ✅	✅
+39.3	handleApplyChannel — بلا RouterGuard	إضافة
+39.4	abortControllerRef ✅	✅
+39.5	useEffect cleanup ✅	✅
+39.6	filteredNetworks ✅	✅
+39.7	getChannelColorStyle ✅	✅
+39.8	signalToHeightPercent ✅	✅
+39.9	scanResult ✅	✅
+39.10	isScanning ✅	✅
+39.11	isApplyingChannel ✅	✅
+39.12	confirmModalChannel ✅	✅
+39.13	applyWidth ✅	✅
+39.14	selectedChannelDetail ✅	✅
+39.15	networkSearchQuery ✅	✅
+39.16	selectedInterface ✅	✅
+39.17	isScanning useRef ✅	✅
+39.18	handleStartScan — await fetchWirelessData ✅	✅
+39.19	handleApplyChannel — await fetchWirelessData ✅	✅
+39.20	handleStartScan — signal ✅	✅
+39.21	isApplyingChannel — finally ✅	✅
+39.22	scanDuration ✅	✅
+40. BandwidthAnalyticsSpikesMonitor.tsx — 24 عيباً
+#	العيب	التصحيح
+40.1	useEffect على [activeUsers] ✅	✅
+40.2	useEffect على [detectedSpikes.length, soundEnabled] ✅	✅
+40.3	useEffect على [rxSpeedMbps, txSpeedMbps, detectedSpikes.length] — slice(-16) ✅	✅
+40.4	handleKickUser — بلا RouterGuard	إضافة
+40.5	handleApplyThrottle — بلا RouterGuard	إضافة
+40.6	detectedSpikes ✅	✅
+40.7	topConsumers ✅	✅
+40.8	userCalculatedRates ✅	✅
+40.9	prevUsersBytesRef ✅	✅
+40.10	lastCalculationTimeRef ✅	✅
+40.11	prevSpikeCountRef ✅	✅
+40.12	playSpikeAlertSound ✅	✅
+40.13	isKickingId ✅	✅
+40.14	handleDismissSpike ✅	✅
+40.15	handleToggleSound ✅	✅
+40.16	handleManualRefresh ✅	✅
+40.17	wanInterface ✅	✅
+40.18	rxSpeedMbps/txSpeedMbps ✅	✅
+40.19	peakThroughput ✅	✅
+40.20	trafficHistory ✅	✅
+40.21	spikeThresholdMbps ✅	✅
+40.22	soundEnabled ✅	✅
+40.23	handleApplyThrottle — addQueue — try/finally ✅	✅
+40.24	handleKickUser — finally ✅	✅
+41. RouterResourcesMonitor.tsx — 16 عيباً
+#	العيب	التصحيح
+41.1	useEffect على 8 deps — حلقة	useRef
+41.2	handleQuickFlushDns — بلا RouterGuard	إضافة
+41.3	handleManualRefresh — بلا RouterGuard	إضافة
+41.4	history useState ✅	✅
+41.5	peakCpu/peakRamPercent/avgCpu/avgRam ✅	✅
+41.6	chartMode ✅	✅
+41.7	isFlushingDns/isManualSyncing ✅	✅
+41.8	setEcoMode(!ecoMode) ✅	✅
+41.9	thermalShieldActive ✅	✅
+41.10	cpuLoad/totalRamBytes/freeRamBytes ✅	✅
+41.11	usedRamBytes/ramUsagePercent ✅	✅
+41.12	cpuTemperature ✅	✅
+41.13	totalRamMb/freeRamMb/usedRamMb ✅	✅
+41.14	isCpuCritical/isCpuElevated/isRamCritical/isRamElevated/isOverallSafe ✅	✅
+41.15	CPU_SAFE_LIMIT/CPU_CRITICAL_LIMIT/RAM_SAFE_LIMIT/RAM_CRITICAL_LIMIT ✅	✅
+41.16	لا React.memo	إضافة
+42. HybridPortalEditor.tsx — 18 عيباً
+#	العيب	التصحيح
+42.1	handleFolderUpload — for...of على 500+ ملف	processInChunks
+42.2	handleLoadFromRouter — for...of	processInChunks
+42.3	handleZipUpload — try/catch ✅	✅
+42.4	handleDeploy — بلا RouterGuard	إضافة
+42.5	handleExportZip — revokeObjectURL ✅	✅
+42.6	handleValidate — try/catch مفقود	إضافة
+42.7	fileTree ✅	✅
+42.8	activeFile/stats ✅	✅
+42.9	handleContentChange ✅	✅
+42.10	handleCopyScript — try/catch	إضافة
+42.11	handleStartScan ✅	✅
+42.12	isScanning ✅	✅
+42.13	isQrScannerOpen ✅	✅
+42.14	handleApplyVoucherPin ✅	✅
+42.15	handleUpdateVlan ✅	✅
+42.16	handleScanQrImage — reader.onload ✅	✅
+42.17	abortControllerRef ✅	✅
+42.18	isMountedRef ✅	✅
+43. HeaderProfileSwitcher.tsx — 12 عيباً
+#	العيب	التصحيح
+43.1	useEffect على [isOpen] ✅	✅
+43.2	activeProfile ✅	✅
+43.3	handleQuickSwitch — try/catch	إضافة
+43.4	handleClickOutside cleanup ✅	✅
+43.5	isOpen ✅	✅
+43.6	CATEGORY_ICONS ✅	✅
+43.7	activeProfileId ✅	✅
+43.8	activeProfile — ?. ✅	✅
+43.9	ActiveIcon ✅	✅
+43.10	لا React.memo	إضافة
+43.11	connectionProfiles — slice(0, 3) ✅	✅
+43.12	aria-label على زر التبديل	إضافة
+44. RouterConnectionProfilesModal.tsx — 20 عيباً
+#	العيب	التصحيح
+44.1	useEffect على [isOpen, isConnecting, onClose] — onClose غير مستقر	useCallback
+44.2	handleExportProfiles — revokeObjectURL مفقود	إضافة
+44.3	handleImportProfiles — saveConnectionProfile(p) بلا تحقق	إضافة
+44.4	handleTestProfile — fetch بلا AbortController	useAbortableFetch
+44.5	handleActivateOneClick ✅	✅
+44.6	handleExecutePromptPassword — try/catch	إضافة
+44.7	handleSaveForm — بلا RouterGuard	إضافة
+44.8	passwordPromptProfile ✅	✅
+44.9	promptPasswordInput ✅	✅
+44.10	formCategory ✅	✅
+44.11	formPort ✅	✅
+44.12	formUseSsl ✅	✅
+44.13	formIsDefault ✅	✅
+44.14	formNotes ✅	✅
+44.15	CATEGORY_META ✅	✅
+44.16	handleOpenAddForm ✅	✅
+44.17	handleOpenEditForm ✅	✅
+44.18	handleDelete ✅	✅
+44.19	handleSaveForm — saveConnectionProfile — try/catch	إضافة
+44.20	لا React.memo	إضافة
+📊 الملخص التنفيذي
+جدول تغطية الملفات الـ 44
+#	الملف	عيوب	حرجة	إضافات تصميمية
+1	ActiveSessionsView	19	8	6
+2	AiAssistantView	15	8	5
+3	AppThemeTemplatesView	22	8	6
+4	BackupSettingsView	14	8	7
+5	CardPrintStudioView	8	0	2
+6	CommandPaletteModal	12	8	5
+7	ConfirmModal	9	0	3
+8	ConnectionDiagnosticIndicator	10	2	4
+9	ConnectRouterModal	16	6	6
+10	DashboardView	14	4	5
+11	DesktopHeader	17	5	6
+12	DhcpLeasesView	18	6	5
+13	ErrorBoundary	8	0	3
+14	FirewallSecurityView	22	12	5
+15	FloatingSubscribersActionBar	9	0	4
+16	InterfacesTrafficView	14	4	4
+17	IpBindingView	18	4	5
+18	LoginForm	16	4	5
+19	LogoWatermark	4	0	1
+20	LogoZ	5	0	1
+21	MikrotikLoginView	18	6	5
+22	NetworkView	20	10	5
+23	PdfExportModal	17	6	5
+24	PortalStudioModal	27	8	6
+25	ProfilesManagerView	20	4	5
+26	QueuesBandwidthView	19	4	5
+27	RouterDiagnosticsModal	12	4	4
+28	RouterTerminalView	10	4	4
+29	ScheduledTasksView	22	10	5
+30	SettingsView	17	2	5
+31	Sidebar	20	2	5
+32	SubscriberActionModals	24	8	5
+33	SubscribersManagerView	27	12	5
+34	SystemLogsView	14	2	4
+35	UserGuideView	8	0	3
+36	ZCtrlTitle	5	0	1
+37	RouterSetupView	16	4	5
+38	AccessPointsSection	20	6	5
+39	WirelessFrequencyScanner	22	4	6
+40	BandwidthAnalyticsSpikesMonitor	24	4	6
+41	RouterResourcesMonitor	16	4	4
+42	HybridPortalEditor	18	4	5
+43	HeaderProfileSwitcher	12	2	4
+44	RouterConnectionProfilesModal	20	4	5
+الإجمالي:
+
+720+ عيباً موثقاً
+
+224+ عيباً حرجاً (يجب إصلاحه فوراً)
+
+200+ إضافة تصميمية
+
+10 ملفات تأسيسية جديدة
+
+الأولويات
+P0 — فوري: كل عيوب RouterGuard في 20 ملفاً، AbortController في 12 ملفاً، sanitize.cliArg في 4 ملفات، pass في AiAssistantView، revokeObjectURL في AppThemeTemplatesView.
+
+P1 — عاجل: useRef guard في 12 ملفاً، React.memo في 20 ملفاً، processInChunks في 8 ملفات، content-visibility في 8 ملفات.
+
+P2 — مهم: aria-label في 30 ملفاً، tooltip في 30 ملفاً، Empty state في 8 ملفات، Skeleton في 3 ملفات.
+
+P3 — تحسين: toLocaleTimeString('ar-EG') في ConnectionDiagnosticIndicator، @import 'Inter' في index.css، @keyframes zctrl-title في animations.css.
+

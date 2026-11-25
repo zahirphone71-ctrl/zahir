@@ -1,0 +1,23 @@
+{
+  "name": "ZCtrl | MikroTik Management & Card Studio",
+  "short_name": "ZCtrl",
+  "description": "نظام تحكم وإدارة سيرفرات مايكروتك وتوليد وطباعة الكروت",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,1188 @@
+ل اليدوي يجب ان تكون داخل البرنامج
+خطة التصحيح والتدقيق الشاملة النهائية — ZCtrl Voucher Studio
+تغطية كل حرف في كل ملف + كل إدخال يدوي داخل البرنامج
+ملاحظة: هذه وثيقة تصحيحية تدقيقية (وليست خطة تنفيذ) — كل بند فيها يُطبَّق داخل الملف المذكور، بدون استثناء، بما في ذلك كل إدخال يدوي يجب أن يكون داخل واجهة البرنامج (لا نوافذ prompt، لا alert، لا إدخال خارج النظام).
+
+📋 فهرس التغطية الشاملة
+الطبقة 1: ملفات الجذر والتكوين (4 ملفات)
+
+الطبقة 2: ملفات lib/ (الأدوات الأساسية) (8 ملفات)
+
+الطبقة 3: ملفات voucher/ (المحرك) (15 ملف)
+
+الطبقة 4: مكونات UI الموحدة (12 ملف)
+
+الطبقة 5: تبويبات VoucherStudio/ (11 ملف)
+
+الطبقة 6: سياق MikroTik + الهيكل العام (3 ملفات)
+
+الطبقة 7: الإدخال اليدوي — كل حقل في البرنامج (جداول كاملة)
+
+الطبقة 8: الأمان والصلاحيات (2 ملف)
+
+الطبقة 9: اختبارات التدقيق النهائي (Checklist)
+
+🏛️ الطبقة 1: ملفات الجذر والتكوين
+1. designTokens.ts (جديد)
+الغرض: المصدر الوحيد لكل بكسل ولون وحركة وأيقونة وأبعاد في البرنامج.
+
+المحتوى الكامل:
+
+ts
+// designTokens.ts
+export const TOKENS = Object.freeze({
+  // ═══ الألوان ═══
+  color: Object.freeze({
+    bg: Object.freeze({ base: '#090d16', surface: '#0f172a', elevated: '#1e293b', hover: '#273449', overlay: 'rgba(9,13,22,0.85)' }),
+    border: Object.freeze({ subtle: '#1e293b', normal: '#334155', focus: '#6366f1', error: '#f43f5e' }),
+    text: Object.freeze({ primary: '#f8fafc', secondary: '#94a3b8', muted: '#64748b', inverse: '#0f172a', link: '#38bdf8' }),
+    accent: Object.freeze({ cyan: '#06b6d4', amber: '#f59e0b', emerald: '#10b981', rose: '#f43f5e', indigo: '#6366f1', violet: '#8b5cf6', pink: '#ec4899' }),
+    state: Object.freeze({ success: '#10b981', warning: '#f59e0b', error: '#f43f5e', info: '#06b6d4', pending: '#94a3b8' }),
+    brand: Object.freeze({ primary: '#6366f1', secondary: '#8b5cf6', gradient: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }),
+  }),
+
+  // ═══ المسافات (8px grid) ═══
+  space: Object.freeze({ 0: '0', 1: '4px', 2: '8px', 3: '12px', 4: '16px', 5: '20px', 6: '24px', 8: '32px', 10: '40px', 12: '48px', 16: '64px', 20: '80px' }),
+
+  // ═══ الزوايا ═══
+  radius: Object.freeze({ none: '0', xs: '4px', sm: '6px', md: '10px', lg: '14px', xl: '18px', '2xl': '22px', full: '9999px' }),
+
+  // ═══ الظلال ═══
+  shadow: Object.freeze({
+    xs: '0 1px 2px rgba(0,0,0,0.15)', sm: '0 2px 4px rgba(0,0,0,0.2)', md: '0 4px 12px rgba(0,0,0,0.3)',
+    lg: '0 8px 24px rgba(0,0,0,0.4)', xl: '0 16px 48px rgba(0,0,0,0.5)', '2xl': '0 24px 64px rgba(0,0,0,0.6)',
+    glow: Object.freeze({ cyan: '0 0 20px rgba(6,182,212,0.4)', amber: '0 0 20px rgba(245,158,11,0.4)', emerald: '0 0 20px rgba(16,185,129,0.4)', indigo: '0 0 20px rgba(99,102,241,0.4)' }),
+  }),
+
+  // ═══ الحركات ═══
+  motion: Object.freeze({
+    duration: Object.freeze({ instant: '80ms', fast: '150ms', normal: '250ms', slow: '400ms', lazy: '600ms' }),
+    easing: Object.freeze({ standard: 'cubic-bezier(0.4,0,0.2,1)', decelerate: 'cubic-bezier(0,0,0.2,1)', accelerate: 'cubic-bezier(0.4,0,1,1)', spring: 'cubic-bezier(0.34,1.56,0.64,1)', bounce: 'cubic-bezier(0.68,-0.55,0.265,1.55)' }),
+  }),
+
+  // ═══ الأبعاد (بالبكسل) ═══
+  dim: Object.freeze({
+    button: Object.freeze({ sm: Object.freeze({ h: 32, px: 12, font: 11, icon: 14, gap: 6 }), md: Object.freeze({ h: 40, px: 16, font: 13, icon: 16, gap: 8 }), lg: Object.freeze({ h: 48, px: 24, font: 15, icon: 20, gap: 10 }) }),
+    input: Object.freeze({ sm: Object.freeze({ h: 32, px: 10, font: 11 }), md: Object.freeze({ h: 40, px: 12, font: 13 }), lg: Object.freeze({ h: 48, px: 14, font: 15 }) }),
+    icon: Object.freeze({ xs: 12, sm: 14, md: 16, lg: 20, xl: 24, '2xl': 32 }),
+    card: Object.freeze({ p: 20, radius: 16, headerH: 56, footerH: 48 }),
+    tab: Object.freeze({ h: 36, px: 14, font: 12, icon: 16, gap: 6 }),
+    modal: Object.freeze({ headerH: 64, footerH: 56, p: 20, radius: 16 }),
+    table: Object.freeze({ rowH: 48, headerH: 44, cellPx: 12, font: 12 }),
+    badge: Object.freeze({ sm: Object.freeze({ h: 20, px: 8, font: 10 }), md: Object.freeze({ h: 24, px: 10, font: 11 }) }),
+    toast: Object.freeze({ h: 48, px: 16, font: 12, radius: 12 }),
+    avatar: Object.freeze({ sm: 24, md: 32, lg: 40, xl: 48 }),
+    switch: Object.freeze({ w: 44, h: 24, knob: 20 }),
+    checkbox: Object.freeze({ size: 16, radius: 4 }),
+    slider: Object.freeze({ trackH: 6, thumbSize: 16 }),
+    progress: Object.freeze({ h: 8, radius: 999 }),
+  }),
+
+  // ═══ الخطوط ═══
+  font: Object.freeze({
+    size: Object.freeze({ xs: '10px', sm: '11px', base: '12px', md: '13px', lg: '14px', xl: '16px', '2xl': '18px', '3xl': '20px', '4xl': '24px' }),
+    weight: Object.freeze({ normal: 400, medium: 500, semibold: 600, bold: 700, extrabold: 800, black: 900 }),
+    family: Object.freeze({ ui: "'Tajawal', sans-serif", mono: "'JetBrains Mono', monospace", display: "'Cairo', sans-serif" }),
+  }),
+
+  // ═══ Z-Index ═══
+  z: Object.freeze({ base: 0, card: 10, cardActive: 30, dropdown: 100, sticky: 200, drawer: 500, modal: 1000, toast: 2000, tooltip: 3000, overlay: 4000 }),
+});
+
+// ═══ خريطة الأيقونات الدلالية ═══
+export const ICON_MAP = Object.freeze({
+  // التنقل
+  navDesigner: 'Sliders', navBatches: 'Layers', navVouchers: 'Database', navStats: 'ShieldCheck', navGallery: 'Palette', navFinancial: 'Coins',
+  // الإجراءات
+  actionRefresh: 'RefreshCw', actionSync: 'Server', actionPrint: 'Printer', actionExport: 'Download', actionSave: 'Save', actionDelete: 'Trash2', actionEdit: 'Pencil', actionAdd: 'Plus', actionClose: 'X', actionCopy: 'Copy', actionSearch: 'Search', actionFilter: 'Filter', actionUpload: 'Upload', actionCheck: 'Check', actionReset: 'RotateCcw', actionZoomIn: 'ZoomIn', actionZoomOut: 'ZoomOut',
+  // الحالات
+  stateSuccess: 'CheckCircle2', stateError: 'AlertCircle', stateWarning: 'AlertTriangle', stateInfo: 'Info', statePending: 'Clock', stateSynced: 'ShieldCheck', stateLoading: 'Loader2',
+  // العناصر
+  elNetwork: 'Wifi', elUser: 'User', elPassword: 'Key', elPrice: 'CreditCard', elTime: 'Clock', elProfile: 'Tag', elData: 'Database', elQr: 'QrCode',
+  // الأدوات
+  toolMove: 'Move', toolRotate: 'RotateCcw', toolResize: 'Maximize2', toolEye: 'Eye', toolEyeOff: 'EyeOff', toolLayers: 'Layers', toolPalette: 'Palette',
+  // الملفات
+  filePdf: 'FileText', fileHtml: 'FileCode', fileCsv: 'Table', fileImage: 'Image',
+  // أخرى
+  brand: 'Zap', sparkles: 'Sparkles', user: 'User', server: 'Server', cpu: 'Cpu', memory: 'HardDrive', calendar: 'Calendar', clock: 'Clock', hash: 'Hash', shield: 'Lock',
+});
+
+// ═══ أبعاد ورقة A4 والكرت ═══
+export const PAPER_DIMENSIONS = Object.freeze({
+  a4: Object.freeze({ w: 210, h: 297, padding: 4 }),
+  a3: Object.freeze({ w: 297, h: 420, padding: 6 }),
+  a5: Object.freeze({ w: 148, h: 210, padding: 3 }),
+  letter: Object.freeze({ w: 215.9, h: 279.4, padding: 4 }),
+  thermal_80mm: Object.freeze({ w: 80, h: 150, padding: 2 }),
+  thermal_58mm: Object.freeze({ w: 58, h: 120, padding: 2 }),
+});
+
+export const VOUCHER_CARD_DIMENSIONS = Object.freeze({
+  default: Object.freeze({ w: 85, h: 52, radius: 10, padding: 4 }),
+  compact: Object.freeze({ w: 60, h: 40, radius: 8, padding: 3 }),
+  mini: Object.freeze({ w: 40, h: 28, radius: 6, padding: 2 }),
+  thermal: Object.freeze({ w: 76, h: 40, radius: 4, padding: 3 }),
+});
+التدقيق: بحث في الكود عن أي # hex لون أو px مكتوب يدوياً → صفر نتائج خارج designTokens.ts.
+
+2. animations.css (جديد)
+الغرض: كل حركة في البرنامج، مع احترام prefers-reduced-motion.
+
+css
+/* ═══ حركات الدخول ═══ */
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideInRight { from { transform: translateX(20px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+@keyframes slideInLeft { from { transform: translateX(-20px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+@keyframes slideInUp { from { transform: translateY(12px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes slideInDown { from { transform: translateY(-12px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes scaleIn { from { transform: scale(0.94); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+@keyframes bounceIn { 0% { transform: scale(0.85); opacity: 0 } 60% { transform: scale(1.03) } 100% { transform: scale(1); opacity: 1 } }
+@keyframes blurIn { from { filter: blur(8px); opacity: 0 } to { filter: blur(0); opacity: 1 } }
+@keyframes rotateIn { from { transform: rotate(-10deg) scale(0.9); opacity: 0 } to { transform: rotate(0) scale(1); opacity: 1 } }
+
+/* ═══ حركات مستمرة ═══ */
+@keyframes pulseGlow { 0%,100% { box-shadow: 0 0 0 0 currentColor } 50% { box-shadow: 0 0 20px 4px currentColor } }
+@keyframes pulseTextGlow { 0%,100% { text-shadow: 0 0 4px currentColor } 50% { text-shadow: 0 0 12px currentColor, 0 0 20px currentColor } }
+@keyframes shimmerText { 0% { background-position: -200% center } 100% { background-position: 200% center } }
+@keyframes neonFlicker { 0%,100% { opacity: 1; text-shadow: 0 0 8px currentColor } 50% { opacity: 0.85; text-shadow: 0 0 16px currentColor, 0 0 24px currentColor } }
+@keyframes spinSlow { to { transform: rotate(360deg) } }
+@keyframes floatY { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-4px) } }
+
+/* ═══ حركات تفاعل ═══ */
+@keyframes pressDown { to { transform: scale(0.96) } }
+@keyframes ripple { from { transform: scale(0); opacity: 0.6 } to { transform: scale(4); opacity: 0 } }
+@keyframes shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-4px) } 75% { transform: translateX(4px) } }
+@keyframes flash { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
+
+/* ═══ Shimmer Loading ═══ */
+@keyframes shimmer {
+  0% { background-position: -200% 0 }
+  100% { background-position: 200% 0 }
+}
+.skeleton {
+  background: linear-gradient(90deg, #1e293b 25%, #273449 50%, #1e293b 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ═══ تطبيقات جاهزة ═══ */
+.animate-fade-in { animation: fadeIn var(--duration-normal) var(--ease-standard) both; }
+.animate-slide-up { animation: slideInUp var(--duration-normal) var(--ease-decelerate) both; }
+.animate-slide-down { animation: slideInDown var(--duration-normal) var(--ease-decelerate) both; }
+.animate-slide-right { animation: slideInRight var(--duration-normal) var(--ease-decelerate) both; }
+.animate-slide-left { animation: slideInLeft var(--duration-normal) var(--ease-decelerate) both; }
+.animate-scale-in { animation: scaleIn var(--duration-fast) var(--ease-spring) both; }
+.animate-bounce-in { animation: bounceIn var(--duration-slow) var(--ease-bounce) both; }
+.animate-blur-in { animation: blurIn var(--duration-slow) var(--ease-decelerate) both; }
+.animate-pulse-glow { animation: pulseGlow 2s infinite var(--ease-standard); }
+.animate-shimmer { animation: shimmer 2s infinite linear; }
+.animate-float { animation: floatY 3s infinite var(--ease-standard); }
+.animate-shake { animation: shake 0.3s ease-in-out; }
+
+/* ═══ Stagger ═══ */
+.stagger > * { animation: slideInUp var(--duration-normal) var(--ease-decelerate) both; }
+.stagger > *:nth-child(1) { animation-delay: 0ms }
+.stagger > *:nth-child(2) { animation-delay: 40ms }
+.stagger > *:nth-child(3) { animation-delay: 80ms }
+.stagger > *:nth-child(4) { animation-delay: 120ms }
+.stagger > *:nth-child(5) { animation-delay: 160ms }
+.stagger > *:nth-child(6) { animation-delay: 200ms }
+.stagger > *:nth-child(n+7) { animation-delay: 240ms }
+
+/* ═══ Shimmer Gold (luxury) ═══ */
+.shimmer-gold {
+  background: linear-gradient(90deg, #fbbf24 0%, #fef3c7 50%, #fbbf24 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmerText 3s linear infinite;
+}
+
+/* ═══ احترام prefers-reduced-motion ═══ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+3. index.css
+الخطأ: لا يستورد animations.css، لا CSS variables.
+
+التصحيح في نفس الملف:
+
+css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@import './animations.css';
+
+:root {
+  --duration-instant: 80ms;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+html { scroll-behavior: smooth; }
+body { background: #090d16; color: #f8fafc; font-family: 'Tajawal', sans-serif; -webkit-font-smoothing: antialiased; }
+
+/* Custom Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0f172a; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+
+/* Print reset */
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  .no-print, .no-export { display: none !important; }
+}
+
+/* Content visibility للكروت */
+.voucher-card-container { content-visibility: auto; contain-intrinsic-size: 52mm 85mm; }
+
+/* Focus visible */
+:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; border-radius: 4px; }
+4. tailwind.config.js
+التصحيح في نفس الملف:
+
+js
+const { TOKENS } = require('./designTokens.cjs');
+module.exports = {
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: TOKENS.color,
+      spacing: TOKENS.space,
+      borderRadius: TOKENS.radius,
+      boxShadow: TOKENS.shadow,
+      fontSize: TOKENS.font.size,
+      fontWeight: TOKENS.font.weight,
+      transitionDuration: TOKENS.motion.duration,
+      transitionTimingFunction: TOKENS.motion.easing,
+      zIndex: TOKENS.z,
+    },
+  },
+  plugins: [],
+};
+🏛️ الطبقة 2: ملفات lib/ (الأدوات الأساسية)
+5. lib/scheduler.ts (جديد)
+ts
+// lib/scheduler.ts — جدولة المهام بدون تجميد
+export async function yieldToMain(): Promise<void> {
+  if ('scheduler' in globalThis && 'yield' in (globalThis as any).scheduler) {
+    await (globalThis as any).scheduler.yield();
+    return;
+  }
+  if (typeof MessageChannel !== 'undefined') {
+    await new Promise<void>(resolve => {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = () => { ch.port1.close(); resolve(); };
+      ch.port2.postMessage(null);
+    });
+    return;
+  }
+  await new Promise(r => setTimeout(r, 0));
+}
+
+export async function processInChunks<T, R>(
+  items: T[],
+  processor: (item: T, index: number) => R | Promise<R>,
+  opts: { budgetMs?: number; onProgress?: (done: number, total: number) => void; signal?: AbortSignal } = {}
+): Promise<R[]> {
+  const { budgetMs = 12, onProgress, signal } = opts;
+  const results: R[] = [];
+  let sliceStart = performance.now();
+  for (let i = 0; i < items.length; i++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    results.push(await processor(items[i], i));
+    if (performance.now() - sliceStart > budgetMs) {
+      onProgress?.(i + 1, items.length);
+      await yieldToMain();
+      sliceStart = performance.now();
+    }
+  }
+  onProgress?.(items.length, items.length);
+  return results;
+}
+
+export function idleCallback(cb: () => void, timeout = 2000): void {
+  if ('requestIdleCallback' in window) (window as any).requestIdleCallback(cb, { timeout });
+  else setTimeout(cb, 1);
+}
+6. lib/lruCache.ts (جديد)
+ts
+// lib/lruCache.ts
+export class LRUCache<K, V> {
+  private map = new Map<K, V>();
+  constructor(private maxSize: number) {}
+  get(key: K): V | undefined {
+    const v = this.map.get(key);
+    if (v !== undefined) { this.map.delete(key); this.map.set(key, v); }
+    return v;
+  }
+  set(key: K, value: V): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    while (this.map.size > this.maxSize) {
+      const k = this.map.keys().next().value;
+      if (k !== undefined) this.map.delete(k);
+    }
+  }
+  clear(): void { this.map.clear(); }
+  get size(): number { return this.map.size; }
+}
+7. lib/routerGuard.ts (جديد)
+ts
+// lib/routerGuard.ts — حماية الراوتر
+export interface GuardResult { ok: boolean; reason?: string; cpu?: number }
+
+export class RouterGuard {
+  private static failures = 0;
+  private static circuitOpen = false;
+  private static lastCheck = 0;
+  private static cachedCpu = 0;
+
+  static async canProceed(token: string, forceCheck = false): Promise<GuardResult> {
+    if (this.circuitOpen) return { ok: false, reason: 'الدائرة مفتوحة مؤقتاً — الراوتر تحت ضغط سابق', cpu: this.cachedCpu };
+    const now = Date.now();
+    if (forceCheck || now - this.lastCheck > 10_000) {
+      try {
+        const res = await fetch('/api/vouchers/precheck', { headers: { 'X-Router-Token': token } });
+        const data = await res.json();
+        this.lastCheck = now;
+        const cpu = data?.data?.routerInfo?.cpuLoad ?? 0;
+        const freeRam = data?.data?.routerInfo?.freeMemory ?? Infinity;
+        this.cachedCpu = cpu;
+        if (cpu > 80) {
+          this.circuitOpen = true;
+          setTimeout(() => { this.circuitOpen = false; this.failures = 0; }, 30_000);
+          return { ok: false, reason: `CPU الراوتر ${cpu}% — تم تأجيل الحقن تلقائياً`, cpu };
+        }
+        if (freeRam < 5 * 1024 * 1024) return { ok: false, reason: 'ذاكرة الراوتر منخفضة (< 5MB)', cpu };
+      } catch {
+        return { ok: true, cpu: this.cachedCpu };
+      }
+    }
+    return { ok: true, cpu: this.cachedCpu };
+  }
+
+  static recordSuccess(): void { this.failures = 0; }
+  static recordFailure(): void { this.failures++; if (this.failures >= 3) this.circuitOpen = true; }
+  static getCpu(): number { return this.cachedCpu; }
+  static reset(): void { this.failures = 0; this.circuitOpen = false; this.lastCheck = 0; this.cachedCpu = 0; }
+}
+8. lib/abortableFetch.ts (جديد)
+ts
+// lib/abortableFetch.ts
+import { useRef, useEffect, useCallback } from 'react';
+
+export function useAbortableFetch() {
+  const controllers = useRef<Set<AbortController>>(new Set());
+  const abortableFetch = useCallback(async (input: RequestInfo, init?: RequestInit) => {
+    const ctrl = new AbortController();
+    controllers.current.add(ctrl);
+    try { return await fetch(input, { ...init, signal: ctrl.signal }); }
+    finally { controllers.current.delete(ctrl); }
+  }, []);
+  useEffect(() => () => { controllers.current.forEach(c => c.abort()); controllers.current.clear(); }, []);
+  return abortableFetch;
+}
+9. lib/regressionGuard.ts (جديد)
+ts
+// lib/regressionGuard.ts
+export function startRegressionGuard(): void {
+  if (typeof PerformanceObserver === 'undefined') return;
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        if (e.duration > 50) console.warn(`[RegressionGuard] Long Task: ${e.duration.toFixed(0)}ms @ ${e.name}`);
+      }
+    }).observe({ entryTypes: ['longtask'] });
+  } catch {}
+}
+10. lib/generationPipeline.ts (جديد)
+ts
+// lib/generationPipeline.ts
+import { yieldToMain } from './scheduler';
+import { RouterGuard } from './routerGuard';
+
+export async function generateVouchersPipeline(params: {
+  quantity: number; batchSize?: number; token: string;
+  profileName: string; serviceType: string; authMode: string; sameUserPass: boolean;
+  price: number; timeLimit: string; dataLimit?: string; codeType: string; codeLength: number;
+  prefix: string; batchComment: string;
+  onChunkDone: (chunk: any[], done: number, total: number) => void;
+  onProgress: (pct: number, msg: string) => void;
+  signal?: AbortSignal;
+}): Promise<{ batchId: string; totalGenerated: number; vouchers: any[] }> {
+  const { quantity, batchSize = 500, token, onChunkDone, onProgress, signal } = params;
+  const allVouchers: any[] = [];
+  const batchId = `BATCH-${Date.now()}`;
+
+  for (let i = 0; i < quantity; i += batchSize) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const chunkQty = Math.min(batchSize, quantity - i);
+    const res = await fetch('/api/vouchers/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Router-Token': token },
+      body: JSON.stringify({ ...params, quantity: chunkQty, batchId, offset: i }),
+      signal,
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    allVouchers.push(...data.vouchers);
+    onChunkDone(data.vouchers, allVouchers.length, quantity);
+    onProgress(Math.round((allVouchers.length / quantity) * 100), `تم ${allVouchers.length}/${quantity}`);
+    await yieldToMain();
+  }
+  return { batchId, totalGenerated: allVouchers.length, vouchers: allVouchers };
+}
+11. lib/injectionPipeline.ts (جديد)
+ts
+// lib/injectionPipeline.ts
+import { RouterGuard } from './routerGuard';
+
+export async function injectVouchersPipeline(params: {
+  vouchers: any[]; token: string; chunkSize?: number; delayBetweenMs?: number;
+  onProgress: (done: number, total: number, cpu: number) => void;
+  signal?: AbortSignal;
+}): Promise<{ synced: number; failed: number }> {
+  const { vouchers, token, chunkSize = 50, delayBetweenMs = 150, onProgress, signal } = params;
+  let synced = 0, failed = 0;
+  for (let i = 0; i < vouchers.length; i += chunkSize) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const guard = await RouterGuard.canProceed(token, i % (chunkSize * 5) === 0);
+    if (!guard.ok) throw new Error(guard.reason);
+    const chunk = vouchers.slice(i, i + chunkSize);
+    try {
+      const res = await fetch('/api/vouchers/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Router-Token': token },
+        body: JSON.stringify({ voucherCodes: chunk.map(v => v.voucherCode) }),
+        signal,
+      });
+      const data = await res.json();
+      if (data.success) { synced += chunk.length; RouterGuard.recordSuccess(); }
+      else { failed += chunk.length; RouterGuard.recordFailure(); }
+    } catch { failed += chunk.length; RouterGuard.recordFailure(); }
+    onProgress(synced, vouchers.length, RouterGuard.getCpu());
+    await new Promise(r => setTimeout(r, delayBetweenMs));
+  }
+  return { synced, failed };
+}
+12. lib/printHelper.ts
+التصحيح في نفس الملف (كما في المراجعة السابقة — #3): إضافة signal + timeout + fallback download.
+
+🏛️ الطبقة 3: ملفات voucher/ (المحرك)
+13. voucher/types.ts — التصحيح (إضافات)
+ts
+// ✅ إضافات في نفس الملف
+export interface VoucherElementStyle {
+  // ... الموجود
+  zIndex?: number;
+}
+
+export interface VoucherLogo {
+  id: string; dataUrl: string; x: number; y: number; size: number;
+  rotation: number; opacity: number; zIndex: number; visible: boolean;
+}
+
+export interface ThemePreset {
+  // ... الموجود
+  layoutStyle: 'vertical-balanced' | 'centered-crest' | 'mirrored' | 'boxless' | 'centered-large' | 'framed' | 'capsule' | 'grid-strict' | 'centered-dark';
+  animation: string;
+  decorations: string[];
+  qrSize?: number;
+}
+
+export interface VoucherDesignState {
+  // ... الموجود
+  logos?: VoucherLogo[];
+  layoutStyle?: string;
+  fontScaleMultiplier?: number;
+}
+
+// ✅ كل دوال I/O تقبل signal
+export interface AutoCalcGridParams { /* ... */ signal?: AbortSignal }
+14. voucher/smartCoords.ts — التصحيح
+ts
+// ✅ تجميد كل الكائنات
+export const LAYOUTS = Object.freeze({
+  wide: Object.freeze({ network:{x:18,y:12}, profile:{x:50,y:12}, price:{x:88,y:12}, user:{x:32,y:44}, password:{x:32,y:68}, qr:{x:84,y:54}, time:{x:20,y:88}, dataLimit:{x:68,y:88} }),
+  narrow: Object.freeze({ network:{x:15,y:10}, profile:{x:50,y:22}, price:{x:85,y:10}, user:{x:30,y:46}, password:{x:30,y:68}, qr:{x:82,y:54}, time:{x:18,y:88}, dataLimit:{x:65,y:88} }),
+  compact: Object.freeze({ network:{x:28,y:8}, price:{x:78,y:8}, profile:{x:28,y:22}, user:{x:28,y:42}, password:{x:28,y:62}, qr:{x:78,y:45}, time:{x:28,y:82}, dataLimit:{x:78,y:68} }),
+  ultra: Object.freeze({ network:{x:50,y:6}, price:{x:50,y:18}, profile:{x:50,y:30}, user:{x:50,y:46}, password:{x:50,y:62}, qr:{x:50,y:76}, time:{x:50,y:88}, dataLimit:{x:50,y:96} }),
+});
+
+export const DEFAULT_SMART_COORDS = Object.freeze({ ...LAYOUTS.wide });
+
+export function getDefaultCoords(): CoordsMap { return { ...DEFAULT_SMART_COORDS }; }
+
+export function computeSmartCoords(...): CoordsMap {
+  // ... الموجود + احترام zIndex
+}
+15. voucher/qrUtils.ts — التصحيح
+ts
+export function buildAutoLoginQrUrl(loginUrl: string, code: string, pin?: string, authMode?: string): string {
+  const safeUrl = (loginUrl || '10.0.0.1').trim().replace(/^(https?:\/\/)+/i, '').replace(/[<>"'`\s]/g, '').slice(0, 200);
+  let hostAndPath = safeUrl;
+  if (!hostAndPath.includes('/')) hostAndPath += '/login';
+  const password = (authMode === 'user_pass' && pin) ? pin : (pin || code);
+  const encodedUser = encodeURIComponent((code || '').slice(0, 64));
+  const encodedPass = encodeURIComponent((password || '').slice(0, 64));
+  const sep = hostAndPath.includes('?') ? '&' : '?';
+  return `http://${hostAndPath}${sep}username=${encodedUser}&password=${encodedPass}&autologin=1`;
+}
+16. voucher/gridCalculator.ts — التصحيح
+ts
+const GRID_CACHE = new WeakMap<object, GridResult>();
+
+export function autoCalcGrid(params: AutoCalcGridParams): GridResult {
+  const cached = GRID_CACHE.get(params as any);
+  if (cached) return cached;
+  // ... الحساب الموجود
+  const result: GridResult = { ... };
+  GRID_CACHE.set(params as any, result);
+  return result;
+}
+
+export function calcFontScale(params: any): number {
+  return autoCalcGrid({ ...params, totalCards: 1 }).fontScale;
+}
+17. voucher/themePresets.ts — التصحيح الشامل
+ts
+// ✅ تعريف كل زخرفة بالبكسل
+export const DECORATION_DEFS: Record<string, { id: string; render: (s: number) => { style: React.CSSProperties; svg?: string } }> = Object.freeze({
+  'top-line': { id: 'top-line', render: (s) => ({ style: { position: 'absolute', left: '5%', right: '5%', top: '28%', height: `${Math.max(0.5, s)}px`, background: 'rgba(255,255,255,0.15)', zIndex: 1, pointerEvents: 'none' } }) },
+  'double-frame': { id: 'double-frame', render: (s) => ({ style: { position: 'absolute', inset: `${Math.max(2, 3*s)}px`, border: `${Math.max(1, 1.5*s)}px solid #d97706`, borderRadius: `${Math.max(2, 4*s)}px`, outline: `${Math.max(1, 0.5*s)}px solid rgba(217,119,6,0.4)`, outlineOffset: `${Math.max(1, 2*s)}px`, pointerEvents: 'none', zIndex: 1 } }) },
+  'corner-arcs': { id: 'corner-arcs', render: (s) => { const size = Math.max(6, 14*s), bw = Math.max(1, 2*s); return { style: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }, svg: `<svg style="position:absolute;inset:0;width:100%;height:100%"><path d="M ${size} 2 Q 2 2 2 ${size}" stroke="#d97706" stroke-width="${bw}" fill="none"/><path d="M calc(100% - ${size}) 2 Q calc(100% - 2) 2 calc(100% - 2) ${size}" stroke="#d97706" stroke-width="${bw}" fill="none"/><path d="M 2 calc(100% - ${size}) Q 2 calc(100% - 2) ${size} calc(100% - 2)" stroke="#d97706" stroke-width="${bw}" fill="none"/><path d="M calc(100% - 2) calc(100% - ${size}) Q calc(100% - 2) calc(100% - 2) calc(100% - ${size}) calc(100% - 2)" stroke="#d97706" stroke-width="${bw}" fill="none"/></svg>` }; } },
+  'cyan-brackets': { id: 'cyan-brackets', render: (s) => { const w = Math.max(8, 16*s), bw = Math.max(1, 2*s); return { style: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }, svg: `<svg style="position:absolute;inset:0;width:100%;height:100%"><path d="M 2 ${w} L 2 2 L ${w} 2" stroke="#22d3ee" stroke-width="${bw}" fill="none"/><path d="M calc(100% - 2) ${w} L calc(100% - 2) 2 L calc(100% - ${w}) 2" stroke="#22d3ee" stroke-width="${bw}" fill="none"/><path d="M 2 calc(100% - ${w}) L 2 calc(100% - 2) L ${w} calc(100% - 2)" stroke="#22d3ee" stroke-width="${bw}" fill="none"/><path d="M calc(100% - 2) calc(100% - ${w}) L calc(100% - 2) calc(100% - 2) L calc(100% - ${w}) calc(100% - 2)" stroke="#22d3ee" stroke-width="${bw}" fill="none"/></svg>` }; } },
+  'dashed-frame': { id: 'dashed-frame', render: (s) => ({ style: { position: 'absolute', inset: `${Math.max(2, 3*s)}px`, border: `${Math.max(1, 1.5*s)}px dashed #92400e`, borderRadius: 0, pointerEvents: 'none', zIndex: 1 } }) },
+  'arabesque': { id: 'arabesque', render: (s) => ({ style: { position: 'absolute', top: 0, left: 0, right: 0, height: `${Math.max(4, 8*s)}px`, background: 'repeating-linear-gradient(90deg, transparent 0 8px, #92400e 8px 9px)', opacity: 0.5, zIndex: 1, pointerEvents: 'none' } }) },
+  'reflections': { id: 'reflections', render: (s) => ({ style: { position: 'absolute', top: 0, left: 0, right: 0, height: '50%', background: 'linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 100%)', pointerEvents: 'none', zIndex: 1 } }) },
+  'red-square': { id: 'red-square', render: (s) => ({ style: { position: 'absolute', top: `${Math.max(4, 6*s)}px`, right: `${Math.max(4, 6*s)}px`, width: `${Math.max(6, 10*s)}px`, height: `${Math.max(6, 10*s)}px`, background: '#dc2626', zIndex: 2, pointerEvents: 'none' } }) },
+  'carbon-lines': { id: 'carbon-lines', render: () => ({ style: { position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 2px, transparent 2px 6px)', pointerEvents: 'none', zIndex: 0 } }) },
+  'glow-line': { id: 'glow-line', render: (s) => ({ style: { position: 'absolute', left: '10%', right: '10%', top: '28%', height: `${Math.max(1, 1.5*s)}px`, background: '#ec4899', boxShadow: '0 0 8px #ec4899, 0 0 16px #ec4899', zIndex: 1, pointerEvents: 'none' } }) },
+  'dots': { id: 'dots', render: (s) => ({ style: { position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(circle, #10b981 1px, transparent 1px)', backgroundSize: `${Math.max(6, 10*s)}px ${Math.max(6, 10*s)}px`, opacity: 0.15, zIndex: 0, pointerEvents: 'none' } }) },
+});
+
+// ✅ ربط الحركة بكل عنصر
+export const THEME_ANIMATIONS: Record<string, { name: string; duration: string; easing: string; targets: Record<string, { animation: string; delay: string }> }> = Object.freeze({
+  'fade-in': { name: 'fade-in', duration: '250ms', easing: 'ease-out', targets: { card:{animation:'fadeIn 250ms ease-out both',delay:'0ms'}, network:{animation:'slideInUp 200ms ease-out both',delay:'40ms'}, price:{animation:'slideInUp 200ms ease-out both',delay:'80ms'}, profile:{animation:'slideInUp 200ms ease-out both',delay:'120ms'}, user:{animation:'scaleIn 250ms cubic-bezier(0.34,1.56,0.64,1) both',delay:'160ms'}, password:{animation:'slideInUp 200ms ease-out both',delay:'200ms'}, qr:{animation:'scaleIn 250ms cubic-bezier(0.34,1.56,0.64,1) both',delay:'240ms'}, time:{animation:'fadeIn 200ms ease-out both',delay:'280ms'}, dataLimit:{animation:'fadeIn 200ms ease-out both',delay:'320ms'} } },
+  'gold-shimmer': { name: 'gold-shimmer', duration: '3s', easing: 'linear', targets: { card:{animation:'fadeIn 300ms ease-out both',delay:'0ms'}, network:{animation:'shimmerText 3s linear infinite',delay:'0ms'}, user:{animation:'scaleIn 300ms cubic-bezier(0.34,1.56,0.64,1) both, shimmerText 2s linear infinite',delay:'100ms'}, qr:{animation:'scaleIn 300ms cubic-bezier(0.34,1.56,0.64,1) both',delay:'150ms'} } },
+  'neon-pulse': { name: 'neon-pulse', duration: '2s', easing: 'ease-in-out', targets: { qr:{animation:'pulseGlow 2s ease-in-out infinite',delay:'0ms'}, user:{animation:'neonFlicker 3s ease-in-out infinite',delay:'0ms'}, network:{animation:'neonFlicker 4s ease-in-out infinite',delay:'0ms'}, password:{animation:'slideInUp 200ms ease-out both',delay:'120ms'} } },
+  'slow-fade': { name: 'slow-fade', duration: '600ms', easing: 'ease-out', targets: { card:{animation:'fadeIn 600ms ease-out both',delay:'0ms'}, user:{animation:'fadeIn 500ms ease-out both',delay:'200ms'}, qr:{animation:'fadeIn 500ms ease-out both',delay:'300ms'} } },
+  'pulse-glow': { name: 'pulse-glow', duration: '2s', easing: 'ease-in-out', targets: { network:{animation:'pulseTextGlow 2s ease-in-out infinite',delay:'0ms'}, user:{animation:'pulseTextGlow 2s ease-in-out infinite',delay:'200ms'}, qr:{animation:'pulseGlow 2s ease-in-out infinite',delay:'0ms'} } },
+  'none': { name: 'none', duration: '0ms', easing: 'linear', targets: {} },
+  'blur-in': { name: 'blur-in', duration: '400ms', easing: 'ease-out', targets: { card:{animation:'blurIn 400ms ease-out both',delay:'0ms'}, user:{animation:'blurIn 300ms ease-out both',delay:'100ms'}, qr:{animation:'scaleIn 300ms cubic-bezier(0.34,1.56,0.64,1) both',delay:'150ms'} } },
+  'soft-fade': { name: 'soft-fade', duration: '300ms', easing: 'ease-out', targets: { card:{animation:'fadeIn 300ms ease-out both',delay:'0ms'}, user:{animation:'fadeIn 200ms ease-out both',delay:'80ms'}, qr:{animation:'fadeIn 200ms ease-out both',delay:'120ms'} } },
+});
+
+// ✅ القوالب التسعة بشكلهما الكامل
+export const THEME_PRESETS = Object.freeze({
+  modern: Object.freeze({ name:'عصري', layoutStyle:'vertical-balanced', animation:'fade-in', decorations:['top-line'], cardBgGradient:'linear-gradient(135deg,#0f172a 0%,#1e1b4b 100%)', cardRadius:10, cardBorderStyle:'solid', cardBorderWidth:1.5, cardShadow:'0 4px 16px rgba(15,23,42,0.6)', fontFamily:'Tajawal', userBoxStyle:'box', passBoxStyle:'box', priceStyle:'badge', coords: Object.freeze({ network:{x:74,y:15}, profile:{x:48,y:15}, price:{x:22,y:15}, user:{x:34,y:44}, password:{x:34,y:68}, qr:{x:84,y:55}, time:{x:24,y:88}, dataLimit:{x:72,y:88} }), /* باقي الخصائص */ }),
+  luxury: Object.freeze({ name:'ملكي فاخر', layoutStyle:'centered-crest', animation:'gold-shimmer', decorations:['double-frame','corner-arcs'], cardBgGradient:'radial-gradient(ellipse at center, #1c1917 0%, #0c0a09 100%)', cardRadius:4, cardBorderStyle:'double', cardBorderWidth:2.5, cardShadow:'0 6px 20px rgba(217,119,6,0.25)', fontFamily:'Amiri', userBoxStyle:'box', passBoxStyle:'box', priceStyle:'badge', coords: Object.freeze({ network:{x:50,y:13}, profile:{x:16,y:13}, price:{x:86,y:13}, user:{x:38,y:45}, password:{x:38,y:69}, qr:{x:84,y:55}, time:{x:22,y:88}, dataLimit:{x:76,y:88} }), }),
+  gamer: Object.freeze({ name:'سايبر جيمر', layoutStyle:'mirrored', animation:'neon-pulse', decorations:['cyan-brackets'], cardBgGradient:'linear-gradient(135deg,#030712 0%,#180929 100%)', cardRadius:1, cardBorderStyle:'solid', cardBorderWidth:2, cardShadow:'0 0 16px rgba(139,92,246,0.45)', fontFamily:'Cairo', userBoxStyle:'box', passBoxStyle:'box', priceStyle:'highlight', coords: Object.freeze({ qr:{x:18,y:50}, price:{x:18,y:84}, network:{x:70,y:15}, profile:{x:38,y:15}, user:{x:62,y:44}, password:{x:62,y:68}, time:{x:50,y:88}, dataLimit:{x:80,y:88} }), }),
+  minimal: Object.freeze({ name:'مبسط', layoutStyle:'boxless', animation:'slow-fade', decorations:[], cardBgGradient:null, cardRadius:16, cardBorderStyle:'solid', cardBorderWidth:1, cardShadow:'none', fontFamily:'Almarai', userBoxStyle:'underline', passBoxStyle:'underline', priceStyle:'text', coords: Object.freeze({ network:{x:74,y:14}, price:{x:20,y:14}, profile:{x:48,y:14}, user:{x:36,y:44}, password:{x:36,y:68}, qr:{x:84,y:54}, time:{x:22,y:88}, dataLimit:{x:72,y:88} }), }),
+  neon: Object.freeze({ name:'نيون', layoutStyle:'centered-large', animation:'pulse-glow', decorations:['glow-line','dots'], cardBgGradient:'linear-gradient(135deg,#050510 0%,#1a0826 100%)', cardRadius:12, cardBorderStyle:'solid', cardBorderWidth:2, cardShadow:'0 0 18px rgba(236,72,153,0.45)', fontFamily:'Tajawal', userBoxStyle:'box', passBoxStyle:'box', priceStyle:'badge', coords: Object.freeze({ network:{x:50,y:14}, price:{x:88,y:14}, profile:{x:16,y:14}, user:{x:36,y:46}, password:{x:36,y:70}, qr:{x:84,y:55}, time:{x:24,y:88}, dataLimit:{x:74,y:88} }), }),
+  classic: Object.freeze({ name:'كلاسيكي', layoutStyle:'framed', animation:'none', decorations:['dashed-frame','arabesque'], cardBgGradient:null, cardRadius:0, cardBorderStyle:'dashed', cardBorderWidth:2, cardShadow:'none', fontFamily:'Amiri', userBoxStyle:'box', passBoxStyle:'box', priceStyle:'badge', coords: Object.freeze({ network:{x:72,y:16}, price:{x:20,y:16}, profile:{x:46,y:16}, user:{x:36,y:46}, password:{x:36,y:70}, qr:{x:82,y:56}, time:{x:25,y:90}, dataLimit:{x:75,y:90} }), }),
+  glass: Object.freeze({ name:'زجاجي', layoutStyle:'capsule', animation:'blur-in', decorations:['reflections'], cardBgGradient:'linear-gradient(135deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.03) 100%)', cardRadius:22, cardBorderStyle:'solid', cardBorderWidth:1.5, cardShadow:'0 8px 32px rgba(0,0,0,0.37)', fontFamily:'Almarai', userBoxStyle:'pill', passBoxStyle:'pill', priceStyle:'highlight', coords: Object.freeze({ network:{x:74,y:14}, price:{x:20,y:14}, profile:{x:48,y:14}, user:{x:35,y:44}, password:{x:35,y:68}, qr:{x:84,y:54}, time:{x:24,y:88}, dataLimit:{x:72,y:88} }), }),
+  swiss: Object.freeze({ name:'سويسري', layoutStyle:'grid-strict', animation:'none', decorations:['red-square'], cardBgGradient:null, cardRadius:0, cardBorderStyle:'solid', cardBorderWidth:2, cardShadow:'none', fontFamily:'Cairo', userBoxStyle:'none', passBoxStyle:'none', priceStyle:'badge', coords: Object.freeze({ price:{x:22,y:14}, network:{x:72,y:14}, profile:{x:46,y:14}, user:{x:36,y:45}, password:{x:36,y:69}, qr:{x:84,y:52}, time:{x:24,y:88}, dataLimit:{x:74,y:88} }), }),
+  dark: Object.freeze({ name:'ليلي', layoutStyle:'centered-dark', animation:'soft-fade', decorations:['carbon-lines'], cardBgGradient:'linear-gradient(135deg,#090d16 0%,#111827 100%)', cardRadius:8, cardBorderStyle:'solid', cardBorderWidth:1.5, cardShadow:'0 6px 20px rgba(0,0,0,0.6)', fontFamily:'Tajawal', userBoxStyle:'box', passBoxStyle:'box', priceStyle:'highlight', coords: Object.freeze({ network:{x:50,y:13}, price:{x:86,y:13}, profile:{x:16,y:13}, user:{x:35,y:46}, password:{x:35,y:70}, qr:{x:84,y:55}, time:{x:24,y:88}, dataLimit:{x:74,y:88} }), }),
+});
+
+export function applyThemeToDesign(prev: VoucherDesignState, theme: VoucherDesignState['theme']): VoucherDesignState {
+  const preset = THEME_PRESETS[theme] || THEME_PRESETS.modern;
+  return { ...prev, theme, bgColor: preset.bgColor, cardTextColor: preset.cardTextColor, borderColor: preset.borderColor, primaryColor: preset.primaryColor, fontFamily: preset.fontFamily, layoutStyle: preset.layoutStyle, elements: { /* ... */ }, coords: JSON.parse(JSON.stringify(preset.coords)) };
+}
+18. voucher/voucherRenderCore.ts (جديد)
+ts
+// voucher/voucherRenderCore.ts — المصدر الوحيد للرسم
+import type { VoucherDesignState, ThemePreset, VoucherLogo } from './types';
+import { THEME_PRESETS, DECORATION_DEFS, THEME_ANIMATIONS } from './themePresets';
+import { getDefaultCoords, CoordsMap } from './smartCoords';
+
+export interface RenderContext { design: VoucherDesignState; preset: ThemePreset; fontScale: number; qrSize: number; }
+
+export const FONT_STACK_MAP: Record<string, string> = Object.freeze({
+  Tajawal: "'Tajawal','Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif",
+  Cairo: "'Cairo','Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif",
+  Amiri: "'Amiri','Traditional Arabic','Geeza Pro',serif",
+  Almarai: "'Almarai','Segoe UI',Tahoma,sans-serif",
+  'JetBrains Mono': "'JetBrains Mono','Courier New',Consolas,monospace",
+  monospace: "'Courier New',Consolas,monospace",
+});
+
+export function resolveFontStack(name: string): string { return FONT_STACK_MAP[name] || FONT_STACK_MAP.Tajawal; }
+
+export function buildContext(design: VoucherDesignState, fontScale: number, qrSize?: number): RenderContext {
+  return { design, preset: THEME_PRESETS[design.theme] || THEME_PRESETS.modern, fontScale: Math.max(0.15, fontScale), qrSize: qrSize ?? design.qrSize ?? 36 };
+}
+
+export function computeCoords(design: VoucherDesignState, preset: ThemePreset): CoordsMap {
+  const def = getDefaultCoords(); const pc = preset.coords;
+  return { network: design.coords?.network ?? pc?.network ?? def.network, profile: design.coords?.profile ?? pc?.profile ?? def.profile, price: design.coords?.price ?? pc?.price ?? def.price, user: design.coords?.user ?? pc?.user ?? def.user, password: design.coords?.password ?? pc?.password ?? def.password, qr: design.coords?.qr ?? pc?.qr ?? def.qr, time: design.coords?.time ?? pc?.time ?? def.time, dataLimit: design.coords?.dataLimit ?? pc?.dataLimit ?? def.dataLimit };
+}
+
+export function computeElementStyle(elKey: keyof VoucherDesignState['elements'], ctx: RenderContext): Record<string, string | number> {
+  const u = (ctx.design.elements as any)?.[elKey] || {}; const p = (ctx.preset.elements as any)?.[elKey] || {}; const s = ctx.fontScale;
+  return {
+    color: u.color || p.color, fontSize: Math.max(4, Math.round((u.fontSize || p.fontSize || 12) * s)),
+    fontWeight: u.fontWeight || p.fontWeight || 'bold', fontFamily: resolveFontStack(u.fontFamily || p.fontFamily || ctx.design.fontFamily),
+    letterSpacing: ((u.letterSpacing ?? p.letterSpacing ?? 0) * s).toFixed(2), rotation: u.rotation || 0,
+    textShadow: (u.hasShadow ?? p.hasShadow) ? `0 2px 4px ${u.shadowColor || p.shadowColor || 'rgba(0,0,0,0.5)'}` : 'none',
+    show: u.show !== false,
+  };
+}
+
+export function computeBoxStyle(style: 'box' | 'underline' | 'pill' | 'none', bg: string, border: string, s: number): Record<string, string | number> {
+  const pv = Math.max(1, Math.round(2 * s)), ph = Math.max(2, Math.round(6 * s));
+  switch (style) {
+    case 'underline': return { background: 'transparent', border: 'none', borderBottom: `2px solid ${border}`, borderRadius: 0, padding: `1px ${ph}px 2px` };
+    case 'pill': return { background: bg, border: `1px solid ${border}`, borderRadius: '999px', padding: `${pv}px ${Math.max(4, Math.round(10 * s))}px` };
+    case 'none': return { background: 'transparent', border: 'none', borderRadius: 0, padding: '1px 2px' };
+    default: return { background: bg, border: `1px solid ${border}`, borderRadius: `${Math.max(1, Math.round(4 * s))}px`, padding: `${pv}px ${ph}px` };
+  }
+}
+
+export function computeCardStyle(ctx: RenderContext): Record<string, string | number> {
+  const { design, preset, fontScale } = ctx;
+  const rBase = design.cardRadiusMm ?? preset.cardRadius;
+  const r = rBase === 0 ? 0 : Math.max(1, Math.round(rBase * fontScale));
+  const bw = Math.max(1, Math.round(preset.cardBorderWidth * fontScale));
+  let border = 'none';
+  if (preset.cardBorderStyle === 'double') border = `${Math.max(2, bw * 3)}px double ${design.borderColor || preset.borderColor}`;
+  else if (preset.cardBorderStyle !== 'none') border = `${bw}px ${preset.cardBorderStyle} ${design.borderColor || preset.borderColor}`;
+  return { background: preset.cardBgGradient || design.bgColor || preset.bgColor, color: design.cardTextColor || preset.cardTextColor, border, borderRadius: `${r}px`, boxShadow: preset.cardShadow, fontFamily: resolveFontStack(design.fontFamily || preset.fontFamily) };
+}
+
+export function computeQrSize(ctx: RenderContext): number { return Math.max(12, Math.round(ctx.qrSize * ctx.fontScale)); }
+
+export function computePriceStyle(preset: ThemePreset, s: number): Record<string, string | number> {
+  if (preset.priceStyle === 'badge') return { background: preset.primaryColor, color: '#ffffff', padding: `${Math.max(1, Math.round(2*s))}px ${Math.max(3, Math.round(8*s))}px`, borderRadius: '999px', fontWeight: 800 };
+  if (preset.priceStyle === 'highlight') return { background: 'rgba(255,255,255,0.1)', padding: `${Math.max(1, Math.round(1*s))}px ${Math.max(2, Math.round(6*s))}px`, borderRadius: '4px', border: `1px solid ${preset.primaryColor}` };
+  if (preset.priceStyle === 'strikethrough') return { textDecoration: 'line-through', textDecorationColor: preset.primaryColor, textDecorationThickness: `${Math.max(1, Math.round(2*s))}px` };
+  return {};
+}
+
+export function computeElementZIndex(elKey: string, design: VoucherDesignState, baseZ = 10): number {
+  const defs: Record<string, number> = { card: 0, network: 5, profile: 5, price: 5, time: 5, dataLimit: 5, user: 20, password: 20, qr: 15 };
+  return (design.elements as any)?.[elKey]?.zIndex ?? (defs[elKey] ?? 0) + baseZ;
+}
+
+export function renderDecorations(preset: ThemePreset, scale: number): Array<{ style: React.CSSProperties; svg?: string }> {
+  return (preset.decorations || []).map(id => DECORATION_DEFS[id]?.render(scale)).filter(Boolean) as any;
+}
+
+export function renderLogos(design: VoucherDesignState, scale: number): Array<{ id: string; src: string; style: React.CSSProperties }> {
+  if (!design.logos?.length) return [];
+  return design.logos.filter(l => l.visible !== false).map(l => ({ id: l.id, src: l.dataUrl, style: { position: 'absolute', left: `${l.x}%`, top: `${l.y}%`, width: `${Math.max(8, Math.round(l.size * scale))}px`, height: 'auto', transform: `translate(-50%,-50%) rotate(${l.rotation || 0}deg)`, opacity: l.opacity ?? 1, zIndex: l.zIndex ?? 5, pointerEvents: 'none' } }));
+}
+
+export function getAnimationForElement(preset: ThemePreset, elKey: string): { animation: string; delay: string } | null {
+  const anim = THEME_ANIMATIONS[preset.animation];
+  return anim?.targets?.[elKey] || null;
+}
+19. voucher/qrPreGenerator.ts — التصحيح
+ts
+import QRCode from 'qrcode';
+import { LRUCache } from '../../lib/lruCache';
+import { processInChunks } from '../../lib/scheduler';
+import { buildAutoLoginQrUrl } from './qrUtils';
+
+const QR_CACHE = new LRUCache<string, string>(500);
+
+export async function preGenerateQrCodes(vouchers: any[], loginUrl: string, authMode: string, qrSize = 120, onProgress?: (d: number, t: number) => void, signal?: AbortSignal): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  await processInChunks(vouchers, async (v) => {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (!v.voucherCode) return;
+    const key = `${v.voucherCode}|${v.voucherPin || ''}|${loginUrl}|${authMode}|${qrSize}`;
+    const cached = QR_CACHE.get(key);
+    if (cached) { result.set(v.voucherCode, cached); return; }
+    try {
+      const url = buildAutoLoginQrUrl(loginUrl, v.voucherCode, v.voucherPin, authMode);
+      const dataUrl = await QRCode.toDataURL(url, { width: qrSize, margin: 1, errorCorrectionLevel: 'L', color: { dark: '#000000', light: '#ffffff' } });
+      QR_CACHE.set(key, dataUrl); result.set(v.voucherCode, dataUrl);
+    } catch { result.set(v.voucherCode, generateFallbackImage(qrSize)); }
+  }, { budgetMs: 12, onProgress });
+  return result;
+}
+
+function generateFallbackImage(size: number): string {
+  if (typeof document === 'undefined') return '';
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const ctx = c.getContext('2d'); if (!ctx) return '';
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#94a3b8'; ctx.font = `${Math.max(8, size/6)}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('QR', size/2, size/2);
+  const out = c.toDataURL('image/png'); c.width = c.height = 1;
+  return out;
+}
+
+export function clearQrCache(): void { QR_CACHE.clear(); }
+20. voucher/pdfExporter.ts — التصحيح
+ts
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas-pro'; // ✅
+import { yieldToMain } from '../../lib/scheduler';
+import { preGenerateQrCodes } from './qrPreGenerator';
+import { generateStandaloneVoucherHtmlAsync } from './voucherHtmlGenerator';
+
+// ... نفس الدوال مع إضافة:
+// ✅ signal في كل دالة
+// ✅ foreignObjectRendering: true
+// ✅ destroyCanvas كامل
+// ✅ yieldToMain بدل setTimeout(0)
+21. voucher/voucherHtmlGenerator.ts — التصحيح
+ts
+import { buildContext, computeCoords, computeElementStyle, computeBoxStyle, computeCardStyle, computeQrSize, computePriceStyle, resolveFontStack, renderDecorations, renderLogos } from './voucherRenderCore';
+import { processInChunks } from '../../lib/scheduler';
+import { JSPDF_INLINE, HTML2CANVAS_INLINE } from './inlineLibs';
+
+// ✅ استبدال كل getBoxStyles بـ computeBoxStyle
+// ✅ استبدال scaleEl بـ computeElementStyle
+// ✅ استبدال CDN بـ inline scripts
+// ✅ استبدال alert() بـ inline banner
+// ✅ processInChunks بدل setTimeout(0)
+// ✅ إضافة الشعارات (renderLogos)
+// ✅ إضافة الزخارف (renderDecorations)
+22. voucher/VoucherCardPreview.tsx — التصحيح
+tsx
+import React from 'react';
+import { QRCodeSVG } from 'qrcode.react';
+import { buildContext, computeCoords, computeElementStyle, computeBoxStyle, computeCardStyle, computeQrSize, computePriceStyle, renderDecorations, renderLogos, computeElementZIndex } from './voucherRenderCore';
+
+export const VoucherCardPreview = React.memo(({ code, pin, price, networkName, currency, timeLimit, dataLimit, profileName, design, fontScale, qrSize, isDense, _forceDensityCols }: any) => {
+  const scale = fontScale ?? (_forceDensityCols ? (_forceDensityCols >= 15 ? 0.32 : _forceDensityCols >= 8 ? 0.5 : _forceDensityCols >= 5 ? 0.7 : _forceDensityCols >= 4 ? 0.82 : 1.0) : isDense ? 0.7 : 1.0);
+  const ctx = buildContext(design, scale, qrSize);
+  const coords = computeCoords(design, ctx.preset);
+  const cardStyle = computeCardStyle(ctx);
+  const qrPx = computeQrSize(ctx);
+  const priceStyle = computePriceStyle(ctx.preset, scale);
+  const elNetwork = computeElementStyle('network', ctx);
+  const elUser = computeElementStyle('user', ctx);
+  const elPass = computeElementStyle('password', ctx);
+  const elPrice = computeElementStyle('price', ctx);
+  const elTime = computeElementStyle('time', ctx);
+  const elProfile = computeElementStyle('profile', ctx);
+  const elData = computeElementStyle('dataLimit', ctx);
+  const decorations = renderDecorations(ctx.preset, scale);
+  const logos = renderLogos(design, scale);
+  // ... رسم كل شيء باستخدام zIndex من computeElementZIndex
+}, (p, n) => p.code === n.code && p.design === n.design && p.fontScale === n.fontScale && p.qrSize === n.qrSize);
+23. voucher/DraggableVoucherCardCanvas.tsx — التصحيح
+tsx
+// ✅ pointer events موحدة
+// ✅ useEffect مربوط مرة واحدة
+// ✅ Core بدل التكرار
+// ✅ زخارف (renderDecorations)
+// ✅ شعارات (renderLogos) + سحبها
+// ✅ لوحة z-order لكل عنصر
+// ✅ لوحة تحكم الشعارات (حجم/دوران/شفافية/zIndex)
+🏛️ الطبقة 4: مكونات UI الموحدة (12 ملف جديد)
+24. components/ui/Icon.tsx
+tsx
+import * as Lucide from 'lucide-react';
+import { TOKENS } from '../../designTokens';
+
+export const Icon: React.FC<{ name: keyof typeof Lucide; size?: keyof typeof TOKENS.dim.icon; className?: string; strokeWidth?: number; color?: string }> = ({ name, size = 'md', className = '', strokeWidth = 2, color }) => {
+  const Comp = Lucide[name] as React.FC<any>;
+  if (!Comp) return null;
+  return <Comp size={TOKENS.dim.icon[size]} strokeWidth={strokeWidth} className={className} style={color ? { color } : undefined} />;
+};
+25. components/ui/Button.tsx
+tsx
+import { TOKENS } from '../../designTokens';
+import { Icon } from './Icon';
+import { ICON_MAP } from '../../designTokens';
+
+export const Button: React.FC<{ variant?: 'primary'|'secondary'|'ghost'|'danger'|'success'; size?: 'sm'|'md'|'lg'; icon?: keyof typeof ICON_MAP; children: React.ReactNode; onClick?: () => void; disabled?: boolean; loading?: boolean; fullWidth?: boolean; }> = ({ variant = 'primary', size = 'md', icon, children, onClick, disabled, loading, fullWidth }) => {
+  const s = TOKENS.dim.button[size];
+  const colors = { primary: 'bg-indigo-600 hover:bg-indigo-500 text-white', secondary: 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700', ghost: 'bg-transparent hover:bg-slate-800 text-slate-300', danger: 'bg-rose-600 hover:bg-rose-500 text-white', success: 'bg-emerald-600 hover:bg-emerald-500 text-white' };
+  return (
+    <button onClick={onClick} disabled={disabled || loading}
+      style={{ height: s.h, padding: `0 ${s.px}px`, fontSize: s.font, gap: s.gap, borderRadius: TOKENS.radius.md, transitionDuration: TOKENS.motion.duration.fast }}
+      className={`inline-flex items-center justify-center font-bold transition-all active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${colors[variant]} ${fullWidth ? 'w-full' : ''}`}>
+      {loading ? <Icon name="Loader2" size={size === 'lg' ? 'lg' : 'md'} className="animate-spin" /> : icon ? <Icon name={ICON_MAP[icon]} size={size === 'lg' ? 'lg' : 'md'} /> : null}
+      {children}
+    </button>
+  );
+};
+26. components/ui/Input.tsx
+tsx
+import { TOKENS } from '../../designTokens';
+import { Icon } from './Icon';
+
+export const Input: React.FC<{ value: string | number; onChange: (v: string) => void; placeholder?: string; icon?: any; type?: string; label?: string; error?: string; disabled?: boolean; }> = ({ value, onChange, placeholder, icon, type = 'text', label, error, disabled }) => {
+  const s = TOKENS.dim.input.md;
+  return (
+    <div className="space-y-1">
+      {label && <label className="text-xs font-bold text-slate-300 block">{label}</label>}
+      <div className="relative">
+        {icon && <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"><Icon name={icon} size="sm" /></div>}
+        <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled}
+          style={{ height: s.h, padding: icon ? `0 ${s.px}px 0 36px` : `0 ${s.px}px`, fontSize: s.font, borderRadius: TOKENS.radius.md, transitionDuration: TOKENS.motion.duration.fast }}
+          className={`w-full bg-slate-950 border text-white placeholder:text-slate-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 transition-all ${error ? 'border-rose-500' : 'border-slate-800'}`} />
+      </div>
+      {error && <p className="text-[11px] text-rose-400">{error}</p>}
+    </div>
+  );
+};
+27. components/ui/Card.tsx
+tsx
+import { TOKENS } from '../../designTokens';
+
+export const Card: React.FC<{ children: React.ReactNode; className?: string; padding?: boolean }> = ({ children, className = '', padding = true }) => (
+  <div className={`bg-slate-900 border border-slate-800 shadow-md ${className}`} style={{ borderRadius: TOKENS.radius.lg, padding: padding ? TOKENS.dim.card.p : 0 }}>{children}</div>
+);
+28. components/ui/Modal.tsx
+tsx
+import { useEffect, useState } from 'react';
+import { TOKENS, ICON_MAP } from '../../designTokens';
+import { Icon } from './Icon';
+
+export const Modal: React.FC<{ open: boolean; onClose: () => void; title: string; subtitle?: string; icon?: keyof typeof ICON_MAP; size?: 'sm'|'md'|'lg'|'xl'|'full'; children: React.ReactNode; footer?: React.ReactNode; }> = ({ open, onClose, title, subtitle, icon, size = 'md', children, footer }) => {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { if (open) { setMounted(true); document.body.style.overflow = 'hidden'; } else { setTimeout(() => setMounted(false), 200); document.body.style.overflow = ''; } return () => { document.body.style.overflow = ''; }; }, [open]);
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
+  if (!mounted && !open) return null;
+  const sizes = { sm: 'max-w-md', md: 'max-w-2xl', lg: 'max-w-4xl', xl: 'max-w-6xl', full: 'max-w-[95vw]' };
+  return (
+    <div className={`fixed inset-0 flex items-center justify-center p-2 transition-opacity duration-200 ${open ? 'opacity-100' : 'opacity-0'}`}
+      style={{ zIndex: TOKENS.z.modal, background: TOKENS.color.bg.overlay, backdropFilter: 'blur(8px)' }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className={`bg-slate-900 border border-slate-800 shadow-xl w-full ${sizes[size]} max-h-[92vh] flex flex-col overflow-hidden transition-all duration-250 ${open ? 'scale-100 translate-y-0' : 'scale-95 translate-y-2'}`}
+        style={{ borderRadius: TOKENS.dim.modal.radius, transitionTimingFunction: TOKENS.motion.easing.spring }}>
+        <div className="border-b border-slate-800 flex items-center justify-between shrink-0" style={{ padding: `0 ${TOKENS.dim.modal.p}px`, height: TOKENS.dim.modal.headerH }}>
+          <div className="flex items-center gap-3">
+            {icon && <div className="p-2 bg-indigo-500/20 rounded-xl text-indigo-400"><Icon name={ICON_MAP[icon]} size="lg" /></div>}
+            <div>
+              <h2 className="text-base font-black text-white">{title}</h2>
+              {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-white transition-colors"><Icon name="X" size="md" /></button>
+        </div>
+        <div className="flex-1 overflow-auto" style={{ padding: TOKENS.dim.modal.p }}>{children}</div>
+        {footer && <div className="border-t border-slate-800 bg-slate-950/50 shrink-0" style={{ padding: `${TOKENS.space[3]} ${TOKENS.dim.modal.p}px` }}>{footer}</div>}
+      </div>
+    </div>
+  );
+};
+29-35. باقي مكونات UI
+components/ui/Motion.tsx — FadeIn, SlideUp, PressableButton
+
+components/ui/AnimatedTabs.tsx — مؤشر منزلق
+
+components/ui/Badge.tsx — شارات
+
+components/ui/Toggle.tsx — مفتاح
+
+components/ui/SegmentedControl.tsx
+
+components/ui/Select.tsx
+
+components/ui/Slider.tsx
+
+components/ui/ZoomControl.tsx
+
+components/ui/Toast.tsx
+
+components/ui/ProgressBar.tsx
+
+components/ui/Skeleton.tsx
+
+كلها بنفس الأبعاد من TOKENS.dim.
+
+🏛️ الطبقة 5: تبويبات VoucherStudio/ (11 ملف)
+36. VoucherStudio/AllVouchersTab.tsx — التصحيح
+✅ useAbortableFetch
+
+✅ RouterGuard قبل المزامنة
+
+✅ VirtualizedVoucherTable
+
+✅ Button/Icon/Input/Card من ui/
+
+37. VoucherStudio/BatchesManagerTab.tsx — التصحيح
+✅ useAbortableFetch
+
+✅ RouterGuard في handleSyncBatch و handleResumeBatch و handleImportGroup
+
+✅ Button/Icon من ui/
+
+✅ Modal للـ Audit
+
+38. VoucherStudio/FinancialReportTab.tsx — التصحيح
+✅ useAbortableFetch
+
+✅ 4 KPIs: GeneratedValue / InvoicedRevenue / UsedRevenue / UnsyncedValue
+
+✅ قسم "التسوية المحاسبية" (DB vs Router)
+
+✅ Button/Card/Icon
+
+39. VoucherStudio/SystemStatsTab.tsx — التصحيح
+✅ useAbortableFetch
+
+✅ Card/Icon
+
+40. VoucherStudio/ThemeGalleryView.tsx — التصحيح
+✅ useAbortableFetch
+
+✅ عرض layoutStyle + animation + decorations لكل قالب
+
+✅ Button/Card/Icon
+
+41. VoucherStudio/CustomVoucherModal.tsx — التصحيح
+✅ Modal موحد
+
+✅ generateStandaloneVoucherHtmlAsync بدل HTML يدوي
+
+✅ RouterGuard قبل الحقن
+
+✅ Input/Select/Button
+
+42. VoucherStudio/DesignTab.tsx — التصحيح
+✅ useCallback لكل معالج
+
+✅ Button/Input/Select/Icon
+
+✅ إضافة قسم z-order
+
+✅ إضافة قسم الشعارات
+
+43. VoucherStudio/index.tsx — التصحيح
+✅ AppShell
+
+✅ AnimatedTabs
+
+✅ startRegressionGuard()
+
+✅ useAbortableFetch
+
+✅ RouterGuard في onSync
+
+✅ memoization
+
+44. VoucherStudio/LiveVoucherPreview.tsx — التصحيح
+✅ React.memo
+
+✅ Button/Icon
+
+45. VoucherStudio/VoucherPrintModal.tsx — التصحيح (5 مناطق)
+✅ Modal موحد
+
+✅ StatusBanner + PrintToolbar + PrintOptions + A4Sheet + PrintModalFooter
+
+✅ useDeferredValue
+
+✅ content-visibility
+
+✅ React.memo للكروت
+
+✅ RouterGuard في handleSync
+
+46. VoucherStudio/VoucherStudioHeader.tsx — التصحيح
+✅ React.memo
+
+✅ Button/Icon
+
+🏛️ الطبقة 6: سياق MikroTik + الهيكل العام
+47. context/MikroTikContext.tsx — التصحيح
+✅ useAbortableFetch
+
+✅ RouterGuard في syncNow
+
+✅ cleanup
+
+48. components/AppShell.tsx (جديد)
+tsx
+import { TOKENS, ICON_MAP } from '../designTokens';
+import { Icon } from './ui/Icon';
+import { Button } from './ui/Button';
+import { AnimatedTabs } from './ui/AnimatedTabs';
+
+export const AppShell: React.FC<{ children: React.ReactNode; tabs: any[]; activeTab: string; onTabChange: (id: string) => void; onRefresh: () => void; onCustomVoucher: () => void; }> = ({ children, tabs, activeTab, onTabChange, onRefresh, onCustomVoucher }) => (
+  <div className="min-h-screen bg-slate-950 text-slate-100" dir="rtl">
+    <header className="sticky top-0 bg-slate-900/95 backdrop-blur-md border-b border-slate-800" style={{ zIndex: TOKENS.z.sticky, height: 56 }}>
+      <div className="max-w-[1600px] mx-auto px-4 h-full flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-indigo-600 rounded-xl"><Icon name="Zap" size="lg" className="text-white" /></div>
+          <div><h1 className="text-sm font-black text-white">ZCtrl Voucher Studio</h1><p className="text-[10px] text-slate-400">استوديو كروت المايكروتك</p></div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" icon="actionRefresh" onClick={onRefresh}>تحديث</Button>
+          <Button variant="primary" size="sm" icon="sparkles" onClick={onCustomVoucher}>كرت مخصص</Button>
+        </div>
+      </div>
+    </header>
+    <nav className="sticky bg-slate-900/95 backdrop-blur-md border-b border-slate-800" style={{ top: 56, zIndex: TOKENS.z.sticky - 10 }}>
+      <div className="max-w-[1600px] mx-auto px-4 py-2"><AnimatedTabs tabs={tabs} active={activeTab} onChange={onTabChange} /></div>
+    </nav>
+    <main className="max-w-[1600px] mx-auto p-4">{children}</main>
+  </div>
+);
+49. components/AssetManager.tsx (جديد)
+✅ رفع صور + ضغط تلقائي < 100KB
+
+✅ معرض grid متساوٍ
+
+✅ إضافة إلى الكرت (زر)
+
+✅ حذف
+
+🏛️ الطبقة 7: الإدخال اليدوي — كل حقل في البرنامج
+القاعدة: ❌ لا prompt() / alert() / confirm() / إدخال خارج النظام. ✅ كل إدخال عبر Input/Select/Slider/Toggle من ui/.
+
+جدول كل حقول الإدخال في البرنامج
+#	الحقل	النوع	القيم المسموحة	الملف
+1	كمية الكروت	number	1–10000	DesignTab
+2	بادئة الكود	text	A-Z0-9	DesignTab
+3	طول الكود	number	4–16	DesignTab
+4	طول كلمة المرور	number	4–16	DesignTab
+5	السعر	number	0–999999	DesignTab
+6	رمز العملة	text	أي نص	DesignTab
+7	وقت الصلاحية	text	"30 يوم"	DesignTab
+8	حد البيانات	text	"5 GB"	DesignTab
+9	تعليق الدفعة	text	أي نص	DesignTab
+10	اسم الشبكة	text	أي نص	DesignTab
+11	رابط تسجيل الدخول	text	IP/URL	DesignTab
+12	نوع الخدمة	select	hotspot/ppp/userman	DesignTab
+13	نمط المصادقة	select	user_only/user_pass/user_equals_pass	DesignTab
+14	نوع الرموز	select	numbers/letters/mixed	DesignTab
+15	البروفايل	select	من الراوتر	DesignTab
+16	عدد الأعمدة	number	1–20	DesignTab
+17	عدد الصفوف	number	1–30	DesignTab
+18	الهامش العلوي	number	0–50	DesignTab
+19	الهامش السفلي	number	0–50	DesignTab
+20	الهامش الجانبي	number	0–50	DesignTab
+21	الفجوة بين الكروت	number	0–30	DesignTab
+22	عرض الكرت	number	20–200	DesignTab
+23	طول الكرت	number	20–200	DesignTab
+24	نصف قطر الكرت	number	0–40	DesignTab
+25	اسم العميل	text	أي نص	CustomVoucherModal
+26	كود مخصص	text	A-Z0-9	CustomVoucherModal
+27	كلمة مرور مخصصة	text	أي نص	CustomVoucherModal
+28	سعر مخصص	number	0–999999	CustomVoucherModal
+29	وقت مخصص	text	"5h"	CustomVoucherModal
+30	بيانات مخصصة	text	"750 MB"	CustomVoucherModal
+31	ملاحظة	text	أي نص	CustomVoucherModal
+32	بحث الدفعات	text	أي نص	AllVouchersTab
+33	فلتر الحالة	select	all/synced/unsynced/active/used/disabled	AllVouchersTab
+34	بحث الكروت	text	أي نص	AllVouchersTab
+35	بحث المالية	text	أي نص	FinancialReportTab
+36	QR size	slider	16–80	VoucherPrintModal
+37	zoom	slider	35–160	VoucherPrintModal
+38	عدد الأعمدة (Modal)	number	1–20	VoucherPrintModal
+39	عدد الصفوف (Modal)	number	1–30	VoucherPrintModal
+40	اتجاه الورقة	segmented	portrait/landscape	VoucherPrintModal
+41	فواصل القص	toggle	on/off	VoucherPrintModal
+42	اسم القالب	text	أي نص	ThemeGalleryView
+43	حجم الشعار	slider	10–150	DraggableVoucherCardCanvas
+44	دوران الشعار	slider	0–360	DraggableVoucherCardCanvas
+45	شفافية الشعار	slider	0–1	DraggableVoucherCardCanvas
+46	zIndex الشعار	number	0–100	DraggableVoucherCardCanvas
+47	x/y للعنصر	drag/number	2–98	DraggableVoucherCardCanvas
+48	حجم خط العنصر	number	8–72	DesignTab
+49	لون العنصر	color	hex	DesignTab
+50	zIndex العنصر	number	0–100	DesignTab
+التدقيق: بحث في الكود عن prompt( أو alert( أو confirm( → صفر نتائج.
+
+🏛️ الطبقة 8: الأمان والصلاحيات
+50. utils/safeStorage.ts — التصحيح
+✅ تشفير AES-GCM للبيانات الحساسة
+
+✅ try/catch مع console.warn
+
+✅ لا alert() عند الفشل
+
+51. lib/security.ts (جديد)
+ts
+// lib/security.ts — تحقق من المدخلات
+export const Validators = Object.freeze({
+  code: (v: string) => /^[A-Z0-9]{4,16}$/.test(v) || 'الكود: 4-16 حرف/رقم',
+  price: (v: number) => v >= 0 && v <= 999999 || 'السعر: 0-999999',
+  quantity: (v: number) => v >= 1 && v <= 10000 || 'الكمية: 1-10000',
+  url: (v: string) => /^[\w.-]+(:\d+)?(\/.*)?$/.test(v) || 'رابط غير صالح',
+  ip: (v: string) => /^(\d{1,3}\.){3}\d{1,3}$/.test(v) || 'IP غير صالح',
+  text: (v: string, max = 200) => v.length <= max || `النص: max ${max}`,
+  number: (v: number, min: number, max: number) => v >= min && v <= max || `${min}-${max}`,
+});
+
+export function validateAll(checks: Array<() => true | string>): string[] {
+  return checks.map(c => c()).filter(r => r !== true) as string[];
+}
+🏛️ الطبقة 9: اختبارات التدقيق النهائي (Checklist)
+التصميم والحركات
+□ كل الألوان من TOKENS.color
+□ كل المسافات من TOKENS.space
+□ كل الأبعاد من TOKENS.dim
+□ كل الأيقونات من <Icon>
+□ كل الأزرار من <Button>
+□ كل الحقول من <Input>
+□ كل النوافذ من <Modal>
+□ كل التبويبات من <AnimatedTabs>
+□ prefers-reduced-motion محترم
+□ لا حركة > 400ms
+القوالب
+□ 9 قوالب تختلف في: layoutStyle + animation + decorations + الألوان + الخط + الزوايا + الإطار + الظل + الترتيب
+□ كل قالب يعمل في: المعاينة + الطباعة + PDF + HTML
+□ Object.freeze على كل presets
+□ كل زخرفة (DECORATION_DEFS) لها شكل مرئي محدد
+الشعارات
+□ AssetManager يضغط الصور < 100KB
+□ شعار قابل للسحب والحجم والدوران والشفافية و zIndex
+□ يظهر في المعاينة والطباعة و PDF و HTML
+المعاينة
+□ voucherRenderCore مصدر وحيد
+□ VoucherCardPreview مطابق للطباعة 100%
+□ renderDecorations + renderLogos + computeElementZIndex مستخدمة
+الإدخال اليدوي
+□ صفر alert() / prompt() / confirm() في كل الملفات
+□ كل حقل من الجدول (#1–#50) موجود بـ Input/Select/Slider/Toggle
+□ Validators مطبقة على كل حقل
+الأداء
+□ processInChunks في كل حلقة كبيرة
+□ LRUCache في qrPreGenerator
+□ AbortSignal في كل fetch
+□ virtualization في الجداول
+□ content-visibility في الكروت
+□ React.memo على كل مكون ثقيل
+□ لا long task > 50ms
+المايكروتك
+□ RouterGuard قبل كل حقن
+□ InjectionPipeline بدفعات 50
+□ Circuit Breaker بعد 3 إخفاقات
+الأمان
+□ safeStorage مشفر AES-GCM
+□ qrUtils sanitized
+□ Validators مطبقة
+□ printHelper timeout + abort
+البنية
+□ AppShell يغلف كل شيء
+□ index.css يستورد animations.css
+□ tailwind.config.js يستخدم TOKENS
+□ startRegressionGuard() في VoucherStudio/index.tsx
+📊 ملخص التغطية النهائي
+الفئة	عدد الملفات	جديد	إعادة كتابة	تعديل
+الجذر والتكوين	4	2	0	2
+lib/	8	6	0	2
+voucher/	15	2	4	9
+components/ui/	12	12	0	0
+components/ (عام)	3	2	0	1
+VoucherStudio/	11	0	0	11
+context/	1	0	0	1
+الإجمالي	54	24	4	26
+كل ملف في المشروع مشمول — بدون استثناء — وكل إدخال يدوي داخل البرنامج عبر مكونات ui/.
+
+التدقيق النهائي: بحث شامل عن alert(, prompt(, confirm(, from 'lucide-react' (خارج ui/Icon), # hex (خارج designTokens), h-10 (مكتوبة يدوياً) → صفر نتائج.
+

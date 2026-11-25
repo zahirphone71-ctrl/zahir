@@ -1,0 +1,580 @@
+@import "tailwindcss";
+@import "./animations.css";
+
+@layer base {
+  :root {
+    --app-font-family: 'Alexandria', 'Cairo', 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --app-font-scale: 100%;
+    --app-watermark-opacity: 0.07;
+
+    /* ZCtrl Governing Specification v5.0.0 (Section 8.2 Design Tokens) */
+    /* خلفيات السطوح - السمة الفاتحة */
+    --color-bg: #ffffff;
+    --color-bg-subtle: #f8fafc;
+    --color-bg-sunken: #f1f5f9;
+
+    /* النصوص والتباين */
+    --color-fg: #0f172a;           /* تباين 17.85:1 */
+    --color-fg-secondary: #475569; /* تباين 7.58:1 */
+    --color-fg-muted: #64748b;     /* تباين 4.76:1 */
+    --color-fg-disabled: #94a3b8;
+
+    /* الحدود وعناصر التحكم */
+    --color-border: #e2e8f0;
+    --color-border-control: #64748b; /* لتحقيق نسبة 3:1 المطلوبة */
+
+    /* الألوان الأساسية والتفاعلية */
+    --color-primary: #2563eb;
+    --color-primary-hover: #1d4ed8;
+    --color-primary-active: #1e40af;
+    --color-primary-subtle: #eff6ff;
+    --color-focus-ring: #2563eb;
+
+    /* الحالات التشغيلية */
+    --color-success: #15803d;
+    --color-success-subtle: #f0fdf4;
+    --color-warning: #b45309;
+    --color-warning-subtle: #fffbeb;
+    --color-danger: #dc2626;
+    --color-danger-subtle: #fef2f2;
+    --color-info: #0369a1;
+    --color-info-subtle: #f0f9ff;
+
+    /* مقاييس النصوص وارتفاع السطر */
+    --text-xs: 12px;  --line-xs: 16px;
+    --text-sm: 14px;  --line-sm: 24px;
+    --text-base: 16px;--line-base: 28px;
+    --text-lg: 18px;  --line-lg: 28px;
+    --text-xl: 20px;  --line-xl: 28px;
+    --text-2xl: 24px; --line-2xl: 32px;
+    --text-3xl: 30px; --line-3xl: 38px;
+
+    /* شبكة المسافات (المضاعف 4px) */
+    --space-1: 4px;   --space-2: 8px;   --space-3: 12px;  --space-4: 16px;
+    --space-5: 20px;  --space-6: 24px;  --space-8: 32px;  --space-10: 40px;
+
+    /* الحواف الدائرية */
+    --radius-sm: 4px;  --radius-md: 6px;  --radius-lg: 8px;
+    --radius-xl: 12px; --radius-2xl: 16px;--radius-full: 9999px;
+  }
+
+  [data-theme='dark'] {
+    --color-bg-page: #020617;
+    --color-bg: #0f172a;
+    --color-bg-raised: #1e293b;
+    --color-bg-hover: #334155;
+    --color-fg: #f8fafc;
+    --color-fg-secondary: #cbd5e1;
+    --color-fg-muted: #94a3b8;
+    --color-border: #1e293b;
+    --color-primary-subtle: #172554;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background-color: #020617;
+    color: #f8fafc;
+    font-family: var(--app-font-family);
+    font-size: var(--app-font-scale);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+/* ZCtrl Section 8.3: Isolated Technical Terms in RTL */
+.unicode-isolate {
+  unicode-bidi: isolate;
+  direction: ltr;
+  text-align: left;
+}
+
+/* Prestigious Metallic Specular Shimmer for ZCTRL Title & Branding */
+@keyframes zctrlShimmer {
+  0% {
+    background-position: -200% center;
+    filter: drop-shadow(0 2px 8px rgba(245, 158, 11, 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 4px 14px rgba(56, 189, 248, 0.45));
+  }
+  100% {
+    background-position: 200% center;
+    filter: drop-shadow(0 2px 8px rgba(245, 158, 11, 0.35));
+  }
+}
+
+@keyframes logoShinePulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 4px 14px rgba(245, 158, 11, 0.25)) brightness(1);
+  }
+  50% {
+    transform: scale(1.025);
+    filter: drop-shadow(0 6px 20px rgba(56, 189, 248, 0.4)) brightness(1.08);
+  }
+}
+
+.animate-zctrl-logo {
+  animation: logoShinePulse 4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.animate-zctrl-title {
+  background: linear-gradient(
+    90deg,
+    #F59E0B 0%,
+    #FCD34D 20%,
+    #FFFFFF 35%,
+    #38BDF8 50%,
+    #818CF8 65%,
+    #FCD34D 80%,
+    #F59E0B 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: zctrlShimmer 5s linear infinite;
+  display: inline-block;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Custom Scrollbar for sleek modern UI */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(51, 65, 85, 0.8);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  body {
+    font-family: 'Alexandria', 'Cairo', 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: -0.015em;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #070a13;
+    color: #f1f5f9;
+  }
+  
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', 'Plus Jakarta Sans', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  table, td, th {
+    font-variant-numeric: tabular-nums;
+  }
+
+  button, input, select, textarea {
+    font-family: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+}
+
+/* Custom Sleek Desktop Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070a13;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}
+
+/* Glass & Glow utilities */
+.glass-panel {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+}
+
+.glow-blue {
+  box-shadow: 0 0 25px -5px rgba(59, 130, 246, 0.25);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.25);
+}
+
+.glow-amber {
+  box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.25);
+}
+
+/* GLOBAL THEME ENGINE OVERRIDES */
+:root {
+  --app-theme-primary: #3b82f6;
+  --app-theme-secondary: #2563eb;
+  --app-theme-glow: rgba(59, 130, 246, 0.35);
+  --app-theme-bg-main: #070a13;
+  --app-theme-bg-card: #0f172a;
+  --app-theme-bg-header: #0b101d;
+  --app-theme-bg-sidebar: #0c1222;
+  --app-theme-border: #1e293b;
+  --app-theme-text-main: #f1f5f9;
+  --app-theme-text-muted: #60a5fa;
+  --app-theme-radius: 0.75rem;
+  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(59, 130, 246, 0.25) 0%, rgba(29, 78, 216, 0.1) 100%);
+}
+
+[data-app-theme="royal_gold"] {
+  --app-theme-primary: #f59e0b;
+  --app-theme-secondary: #d97706;
+  --app-theme-glow: rgba(245, 158, 11, 0.45);
+  --app-theme-bg-main: #0b0c10;
+  --app-theme-bg-card: #13151f;
+  --app-theme-bg-header: #0e1017;
+  --app-theme-bg-sidebar: #0f1118;
+  --app-theme-border: #78350f;
+  --app-theme-text-main: #fef3c7;
+  --app-theme-text-muted: #d97706;
+  --app-theme-radius: 1rem;
+  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #f59e0b 0%, #b45309 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(245, 158, 11, 0.3) 0%, rgba(180, 83, 9, 0.1) 100%);
+}
+
+[data-app-theme="cyber_matrix"] {
+  --app-theme-primary: #06b6d4;
+  --app-theme-secondary: #a855f7;
+  --app-theme-glow: rgba(6, 182, 212, 0.5);
+  --app-theme-bg-main: #030712;
+  --app-theme-bg-card: #0f172a;
+  --app-theme-bg-header: #090d16;
+  --app-theme-bg-sidebar: #0b0f19;
+  --app-theme-border: #1e1b4b;
+  --app-theme-text-main: #e0f2fe;
+  --app-theme-text-muted: #38bdf8;
+  --app-theme-radius: 0.375rem;
+  --app-theme-font: 'Inter', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #06b6d4 0%, #7e22ce 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(6, 182, 212, 0.3) 0%, rgba(126, 34, 206, 0.15) 100%);
+}
+
+[data-app-theme="emerald_jade"] {
+  --app-theme-primary: #10b981;
+  --app-theme-secondary: #059669;
+  --app-theme-glow: rgba(16, 185, 129, 0.4);
+  --app-theme-bg-main: #04100d;
+  --app-theme-bg-card: #0a1d18;
+  --app-theme-bg-header: #061612;
+  --app-theme-bg-sidebar: #071814;
+  --app-theme-border: #064e3b;
+  --app-theme-text-main: #ecfdf5;
+  --app-theme-text-muted: #34d399;
+  --app-theme-radius: 1.25rem;
+  --app-theme-font: 'Tajawal', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #10b981 0%, #047857 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(16, 185, 129, 0.3) 0%, rgba(4, 120, 87, 0.1) 100%);
+}
+
+[data-app-theme="crimson_velvet"] {
+  --app-theme-primary: #f43f5e;
+  --app-theme-secondary: #e11d48;
+  --app-theme-glow: rgba(244, 63, 94, 0.45);
+  --app-theme-bg-main: #11080c;
+  --app-theme-bg-card: #1a0d13;
+  --app-theme-bg-header: #140a0f;
+  --app-theme-bg-sidebar: #160b10;
+  --app-theme-border: #881337;
+  --app-theme-text-main: #ffe4e6;
+  --app-theme-text-muted: #fb7185;
+  --app-theme-radius: 0.875rem;
+  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #f43f5e 0%, #be123c 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(244, 63, 94, 0.3) 0%, rgba(190, 18, 60, 0.1) 100%);
+}
+
+[data-app-theme="midnight_lavender"] {
+  --app-theme-primary: #8b5cf6;
+  --app-theme-secondary: #7c3aed;
+  --app-theme-glow: rgba(139, 92, 246, 0.45);
+  --app-theme-bg-main: #090714;
+  --app-theme-bg-card: #130f24;
+  --app-theme-bg-header: #0e0a1f;
+  --app-theme-bg-sidebar: #100c22;
+  --app-theme-border: #4c1d95;
+  --app-theme-text-main: #f5f3ff;
+  --app-theme-text-muted: #a78bfa;
+  --app-theme-radius: 1.5rem;
+  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(139, 92, 246, 0.3) 0%, rgba(109, 40, 217, 0.1) 100%);
+}
+
+[data-app-theme="deep_void"] {
+  --app-theme-primary: #38bdf8;
+  --app-theme-secondary: #818cf8;
+  --app-theme-glow: rgba(56, 189, 248, 0.45);
+  --app-theme-bg-main: #000000;
+  --app-theme-bg-card: #08080a;
+  --app-theme-bg-header: #000000;
+  --app-theme-bg-sidebar: #030305;
+  --app-theme-border: #27272a;
+  --app-theme-text-main: #ffffff;
+  --app-theme-text-muted: #94a3b8;
+  --app-theme-radius: 0.875rem;
+  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-button-gradient: linear-gradient(135deg, #0284c7 0%, #4338ca 100%);
+  --app-theme-sidebar-active: linear-gradient(90deg, rgba(56, 189, 248, 0.25) 0%, rgba(67, 56, 202, 0.12) 100%);
+}
+
+/* Theme Engine Universal Overrides */
+:root[data-app-theme] {
+  /* Structural Variables Mapping */
+  --font-sans: var(--app-theme-font) !important;
+  --font-mono: 'JetBrains Mono', 'Plus Jakarta Sans', monospace !important;
+  
+  --tr-stripe: #f8fafc;
+  --nav-active: linear-gradient(90deg, rgba(37,99,235,.1), transparent);
+  --icon-stroke: 1.7;
+  --sb-size: 6px; --sb-track: transparent; --sb-thumb: #cbd5e1; --sb-thumb-hover: #2563eb;
+  --selection-bg: #bfdbfe; --selection-color: #0f172a;
+  --glow: rgba(37,99,235,.2);
+  --brand-gradient: linear-gradient(135deg, #60a5fa, #1d4ed8, #2563eb);
+  --app-sidebar-width: 260px;
+  --brand: var(--app-theme-primary) !important;
+
+  --color-slate-950: var(--app-theme-bg-main) !important;
+  --color-slate-900: var(--app-theme-bg-card) !important;
+  --color-slate-800: var(--app-theme-border) !important;
+  --color-slate-700: var(--app-theme-border) !important;
+  
+  --color-slate-400: var(--app-theme-text-muted) !important;
+  --color-slate-300: var(--app-theme-text-muted) !important;
+  --color-slate-200: var(--app-theme-text-main) !important;
+  --color-slate-100: var(--app-theme-text-main) !important;
+  --color-slate-50: var(--app-theme-text-main) !important;
+
+  /* Brand Primary Colors mapped to standard blue/indigo used in the app */
+  --color-blue-400: var(--app-theme-primary) !important;
+  --color-blue-500: var(--app-theme-primary) !important;
+  --color-blue-600: var(--app-theme-secondary) !important;
+  
+  --color-indigo-500: var(--app-theme-primary) !important;
+  --color-indigo-600: var(--app-theme-secondary) !important;
+
+  /* Adjust border radii across all tailwind components */
+  --radius-sm: calc(var(--app-theme-radius) * 0.3) !important;
+  --radius-md: calc(var(--app-theme-radius) * 0.5) !important;
+  --radius-lg: calc(var(--app-theme-radius) * 0.75) !important;
+  --radius-xl: var(--app-theme-radius) !important;
+  --radius-2xl: calc(var(--app-theme-radius) * 1.25) !important;
+  --radius-3xl: calc(var(--app-theme-radius) * 1.5) !important;
+}
+
+body {
+  background-color: var(--color-slate-950) !important;
+  color: var(--color-slate-100) !important;
+  font-family: var(--app-theme-font) !important;
+}
+
+#main-content-canvas {
+  background-color: var(--color-slate-950) !important;
+}
+
+/* Base tailwind elements overriding */
+.bg-slate-950 { background-color: var(--color-slate-950) !important; }
+.bg-slate-900 { background-color: var(--color-slate-900) !important; border-color: var(--color-slate-800) !important; }
+.bg-slate-900\/95, .bg-slate-900\/90, .bg-slate-900\/80 { background-color: var(--app-theme-bg-sidebar) !important; border-color: var(--color-slate-800) !important; }
+.border-slate-800, .border-slate-800\/80, .border-slate-800\/60 { border-color: var(--color-slate-800) !important; }
+.border-slate-700, .border-slate-700\/80 { border-color: var(--color-slate-700) !important; }
+
+.text-slate-100, .text-slate-200, .text-slate-300 { color: var(--color-slate-100) !important; }
+.text-slate-400, .text-slate-500 { color: var(--color-slate-400) !important; }
+
+/* Force primary gradient everywhere the app uses blue/indigo gradients */
+.from-blue-600.to-indigo-600,
+.from-blue-500.to-indigo-500 {
+  background: var(--app-theme-button-gradient) !important;
+}
+
+.shadow-blue-600\/30, .shadow-blue-600\/25, .shadow-blue-500\/30 {
+  box-shadow: 0 10px 15px -3px var(--app-theme-glow), 0 4px 6px -4px var(--app-theme-glow) !important;
+}
+
+/* Light Mode Overrides for clean_pearl */
+:root.light-mode {
+  --color-slate-950: #f8fafc !important; 
+  --color-slate-900: #ffffff !important; 
+  --color-slate-800: #e2e8f0 !important; 
+  --color-slate-700: #cbd5e1 !important; 
+  
+  --color-slate-400: #64748b !important; 
+  --color-slate-300: #475569 !important; 
+  --color-slate-200: #334155 !important;
+  --color-slate-100: #0f172a !important; 
+  --color-slate-50: #020617 !important;
+}
+
+.light-mode .bg-slate-900 {
+  box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.05) !important;
+}
+
+.light-mode .bg-slate-950\/60,
+.light-mode .bg-slate-950\/40,
+.light-mode .bg-slate-950\/30 {
+  background-color: #f1f5f9 !important;
+}
+
+.light-mode input,
+.light-mode select,
+.light-mode textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* ════════ Deep Void (True Black #000000 & High-Contrast Icons for Extended Night Eye Comfort) ════════ */
+:root[data-app-theme="deep_void"] {
+  color-scheme: dark;
+}
+
+:root[data-app-theme="deep_void"],
+:root[data-app-theme="deep_void"] body,
+:root[data-app-theme="deep_void"] #root,
+:root[data-app-theme="deep_void"] #main-content-canvas,
+:root[data-app-theme="deep_void"] .bg-slate-950,
+:root[data-app-theme="deep_void"] .bg-slate-950\/95,
+:root[data-app-theme="deep_void"] .bg-slate-950\/90,
+:root[data-app-theme="deep_void"] .bg-slate-950\/80,
+:root[data-app-theme="deep_void"] .bg-slate-950\/60,
+:root[data-app-theme="deep_void"] .bg-slate-950\/50,
+:root[data-app-theme="deep_void"] .bg-slate-950\/40,
+:root[data-app-theme="deep_void"] .bg-slate-950\/30 {
+  background-color: #000000 !important;
+}
+
+:root[data-app-theme="deep_void"] .bg-slate-900 {
+  background-color: #08080a !important;
+  border-color: #27272a !important;
+}
+
+:root[data-app-theme="deep_void"] .bg-slate-900\/95,
+:root[data-app-theme="deep_void"] .bg-slate-900\/90,
+:root[data-app-theme="deep_void"] .bg-slate-900\/80 {
+  background-color: #030305 !important;
+  border-color: #27272a !important;
+}
+
+/* High Contrast Icon Enhancements: Crisp contours, vivid clarity & reduced eye fatigue */
+:root[data-app-theme="deep_void"] svg.lucide,
+:root[data-app-theme="deep_void"] .lucide {
+  stroke-width: 2.2px !important;
+  filter: drop-shadow(0 0 1.5px rgba(56, 189, 248, 0.35)) contrast(1.2) !important;
+}
+
+/* High contrast icon containers with clear visible borders against pure black */
+:root[data-app-theme="deep_void"] [class*="p-2.5"][class*="rounded"],
+:root[data-app-theme="deep_void"] [class*="p-2"][class*="rounded"] {
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+/* Pure Black Form Controls */
+:root[data-app-theme="deep_void"] input,
+:root[data-app-theme="deep_void"] select,
+:root[data-app-theme="deep_void"] textarea {
+  background-color: #050507 !important;
+  border-color: #3f3f46 !important;
+  color: #ffffff !important;
+}
+
+:root[data-app-theme="deep_void"] input:focus,
+:root[data-app-theme="deep_void"] select:focus,
+:root[data-app-theme="deep_void"] textarea:focus {
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 1px #38bdf8 !important;
+}
+
+:root[data-app-theme="deep_void"] .border-slate-800,
+:root[data-app-theme="deep_void"] .border-slate-700 {
+  border-color: #27272a !important;
+}
+
+/* Print Clean Optimization for A4 Vouchers & POS Receipts */
+/* ════════ 10) إمكانية الوصول ════════ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-zctrl-title,
+  :root[data-app-theme="cyber_matrix"] body::after { animation: none !important; }
+  *, ::before, ::after {
+    /* 0.01ms وليس 0s — حتى تظل أحداث transitionend/animationend تُطلق
+       ولا تتعطل أكواد JS المنتظرة عليها */
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ════════ 11) الطباعة — كتلة واحدة + Named Pages ════════ */
+@page { size: A4 portrait; margin: 8mm; }
+@page receipt { size: 80mm auto; margin: 4mm; } /* POS حراري عبر page: receipt */
+
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    background-image: none !important;
+    margin: 0; padding: 0;
+    overflow: visible;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  header, nav, aside, footer, .no-print,
+  [role="dialog"] > div:first-child { display: none !important; }
+
+  .print-grid {
+    display: grid !important;
+    width: 100% !important;
+    box-sizing: border-box;
+    break-after: page;
+  }
+  .print-grid:last-of-type { break-after: auto; } /* لا ورقة فارغة أخيرة */
+  .print-grid .app-card, .print-grid .card,
+  .print-grid tr, .print-grid img { break-inside: avoid; }
+
+  /* حراري: يُفعّل بإضافة thermal-print على <body> قبل window.print() */
+  body.thermal-print .print-grid {
+    page: receipt;
+    width: 72mm !important;
+    break-after: auto;
+    font-size: 10px;
+  }
+}

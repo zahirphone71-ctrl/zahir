@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="zctrlBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B132B" />
+      <stop offset="50%" stop-color="#070C1E" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+
+    <!-- Border Ring Gradient -->
+    <linearGradient id="zctrlBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="35%" stop-color="#6366F1" />
+      <stop offset="70%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+
+    <!-- 3D Gold Top Bar Gradient -->
+    <linearGradient id="goldTop" x1="0%" y1="0%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#FFF8D6" />
+      <stop offset="25%" stop-color="#FCD34D" />
+      <stop offset="60%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#D97706" />
+    </linearGradient>
+
+    <!-- 3D Gold Diagonal Primary Gradient -->
+    <linearGradient id="goldDiag" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFEBAA" />
+      <stop offset="30%" stop-color="#F59E0B" />
+      <stop offset="70%" stop-color="#0284C7" />
+      <stop offset="100%" stop-color="#06B6D4" />
+    </linearGradient>
+
+    <!-- 3D Bevel Dark Depth Gradient -->
+    <linearGradient id="goldDepth" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#B45309" />
+      <stop offset="50%" stop-color="#78350F" />
+      <stop offset="100%" stop-color="#1E1B4B" />
+    </linearGradient>
+
+    <!-- 3D Bottom Bar Gradient -->
+    <linearGradient id="goldBottom" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B" />
+      <stop offset="40%" stop-color="#FCD34D" />
+      <stop offset="80%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+
+    <!-- Cyber Cyan Wireless Waves -->
+    <linearGradient id="cyanGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#06B6D4" />
+    </linearGradient>
+
+    <!-- Specular Highlight Glint -->
+    <linearGradient id="whiteGlint" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Shadow & Glow Filters -->
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <filter id="deepShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.65" />
+    </filter>
+
+    <filter id="coreGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Base Squircle Container -->
+  <rect x="20" y="20" width="472" height="472" rx="124" ry="124" fill="url(#zctrlBg)" />
+
+  <!-- Ambient Internal Grid Aura -->
+  <circle cx="256" cy="256" r="190" stroke="url(#zctrlBorder)" stroke-width="1.2" stroke-dasharray="6 8" opacity="0.22" />
+  <circle cx="256" cy="256" r="130" stroke="#38BDF8" stroke-width="1" stroke-dasharray="4 6" opacity="0.18" />
+
+  <!-- Outer Cyber Precision Rim -->
+  <rect x="20" y="20" width="472" height="472" rx="124" ry="124" fill="none" stroke="url(#zctrlBorder)" stroke-width="3.5" opacity="0.9" />
+
+  <!-- Subtle Corner Network Micro-Markers -->
+  <circle cx="84" cy="84" r="3.5" fill="#38BDF8" opacity="0.6" />
+  <circle cx="428" cy="84" r="3.5" fill="#F59E0B" opacity="0.6" />
+  <circle cx="84" cy="428" r="3.5" fill="#6366F1" opacity="0.6" />
+  <circle cx="428" cy="428" r="3.5" fill="#10B981" opacity="0.6" />
+
+  <!-- MikroTik Wireless Waves (Top Right Broadcast Array) -->
+  <g opacity="0.85" filter="url(#coreGlow)">
+    <path d="M 368 132 A 42 42 0 0 1 404 168" stroke="url(#cyanGlow)" stroke-width="4.5" stroke-linecap="round" fill="none" />
+    <path d="M 382 118 A 62 62 0 0 1 436 172" stroke="url(#cyanGlow)" stroke-width="3.5" stroke-linecap="round" fill="none" opacity="0.75" />
+    <path d="M 396 104 A 82 82 0 0 1 466 174" stroke="url(#cyanGlow)" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.45" />
+  </g>
+
+  <!-- The "C" Orbit Arc (Representing Controller & Fiber Loop) -->
+  <path d="M 330 185 C 380 205 405 240 405 285 C 405 345 350 395 270 395 C 190 395 130 350 120 290" 
+        stroke="url(#zctrlBorder)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity="0.3" fill="none" />
+
+  <!-- Group for the Core 3D "Z" Monogram -->
+  <g filter="url(#deepShadow)">
+    <!-- 3D Shadow Depth Underlayer -->
+    <path d="M 124 172 L 358 172 L 202 334 L 376 334 L 358 376 L 112 376 L 272 214 L 124 214 Z" fill="#030712" opacity="0.5" />
+
+    <!-- 1. Top Horizontal Arm of Z with Bevel -->
+    <!-- Base Plate -->
+    <polygon points="120,152 376,152 332,216 196,216 120,152" fill="url(#goldTop)" />
+    <!-- 3D Bottom Bevel Facet -->
+    <polygon points="196,216 332,216 312,234 220,234" fill="url(#goldDepth)" opacity="0.8" />
+    <!-- Specular Highlight Strip -->
+    <line x1="130" y1="155" x2="368" y2="155" stroke="url(#whiteGlint)" stroke-width="3" stroke-linecap="round" />
+
+    <!-- 2. Bottom Horizontal Arm of Z with Bevel -->
+    <!-- Base Plate -->
+    <polygon points="136,312 284,312 392,376 136,376 136,312" fill="url(#goldBottom)" />
+    <!-- 3D Top Bevel Facet -->
+    <polygon points="136,312 284,312 260,296 160,296" fill="url(#goldDepth)" opacity="0.6" />
+    <!-- Specular Highlight Strip -->
+    <line x1="144" y1="373" x2="384" y2="373" stroke="url(#whiteGlint)" stroke-width="2.5" stroke-linecap="round" />
+
+    <!-- 3. Dynamic Center Diagonal Slash (Power Bolt) -->
+    <!-- Darker Bevel Under-Facet (Depth Plane) -->
+    <polygon points="332,216 352,216 206,376 186,376" fill="url(#goldDepth)" />
+    <!-- Main Facing Diagonal Facet -->
+    <polygon points="332,216 268,216 142,352 186,376" fill="url(#goldDiag)" />
+
+    <!-- Fiber-Optic Core Transmission Line -->
+    <line x1="316" y1="228" x2="168" y2="356" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9" filter="url(#coreGlow)" />
+    <line x1="300" y1="224" x2="156" y2="348" stroke="#38BDF8" stroke-width="1.8" stroke-linecap="round" opacity="0.7" />
+  </g>
+
+  <!-- Central RouterOS Microchip Node Core -->
+  <g filter="url(#coreGlow)">
+    <!-- Outer Node Ring -->
+    <circle cx="242" cy="286" r="14" fill="#0B132B" stroke="#38BDF8" stroke-width="2.5" />
+    <!-- Inner Glowing Router LED -->
+    <circle cx="242" cy="286" r="6" fill="#10B981" />
+    <circle cx="242" cy="286" r="2.5" fill="#FFFFFF" />
+  </g>
+
+  <!-- Top-Right Origin Node -->
+  <circle cx="376" cy="152" r="5" fill="#F59E0B" filter="url(#coreGlow)" />
+  <circle cx="376" cy="152" r="2" fill="#FFFFFF" />
+
+  <!-- Bottom-Left Origin Node -->
+  <circle cx="136" cy="376" r="5" fill="#10B981" filter="url(#coreGlow)" />
+  <circle cx="136" cy="376" r="2" fill="#FFFFFF" />
+</svg>
