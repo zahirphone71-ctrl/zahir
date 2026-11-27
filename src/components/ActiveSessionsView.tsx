@@ -159,7 +159,7 @@ export const ActiveSessionsView: React.FC = () => {
     } else {
       syncNow(true).catch(() => {});
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Run initial live sync once on mount only
   }, []);
 
   // Combine Hotspot, PPPoE, and User Manager into a unified active session array

@@ -231,7 +231,20 @@ export interface VoucherDesignState {
 
   cardWidthMm?: number;
   cardHeightMm?: number;
-  paperType: 'a4' | 'a4_100' | 'a4_40' | 'a4_400' | 'thermal_80mm' | 'thermal_58mm' | 'a3' | 'a5' | 'letter';
+  paperType:
+    | 'a4'
+    | 'a4_100'
+    | 'a4_40'
+    | 'a4_400'
+    | 'thermal_80mm'
+    | 'thermal_58mm'
+    | 'pos_80mm'
+    | 'pos_58mm'
+    | 'pos80'
+    | 'pos58'
+    | 'a3'
+    | 'a5'
+    | 'letter';
   paperOrientation?: 'portrait' | 'landscape';
   qrSize?: number;
   gridMode?: 'auto' | 'custom';
@@ -328,4 +341,9 @@ export interface GridResult {
   totalCards: number;
   gapMm: number;
   paddingMm: number;
+  paperWidthMm: number;
+  paperHeightMm: number;
+  isPos: boolean;
+  paperLabel: string;
+  readabilityWarning?: string;
 }

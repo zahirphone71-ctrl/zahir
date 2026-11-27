@@ -183,9 +183,6 @@ export const SettingsView: React.FC = () => {
   const [savePasswordPolicy, setSavePasswordPolicy] = useState(() => {
     return safeStorage.getItem('set_sec_save_pass') === 'true';
   });
-  const [autoLogoutPolicy, setAutoLogoutPolicy] = useState(() => {
-    return safeStorage.getItem('set_sec_auto_logout') === 'true';
-  });
 
   // New Application Settings States
   const [currency, setCurrency] = useState(() => {
@@ -227,7 +224,9 @@ export const SettingsView: React.FC = () => {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed.filter((k: string) => k !== 'actions');
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[SettingsView] failed to parse subscribers_visible_cols', err);
+    }
     return DEFAULT_COLUMN_KEYS.filter((k) => k !== 'actions');
   });
 
@@ -336,16 +335,18 @@ export const SettingsView: React.FC = () => {
     safeStorage.setItem('set_app_theme_preset', themePreset);
 
     // Apply font scale dynamically to document root
-    document.documentElement.style.setProperty('--app-font-scale', `${fontSize}%`);
+    const fontScalePct = Number(fontSize) || 100;
+    document.documentElement.style.setProperty('--app-font-scale', `${fontScalePct}%`);
+    document.documentElement.style.setProperty('--app-base-font-size', `calc(16px * ${fontScalePct} / 100)`);
     document.documentElement.style.setProperty('--app-watermark-opacity', watermarkOpacity);
 
     const fontMap: Record<string, string> = {
-      cairo: "'Cairo', sans-serif",
-      tajawal: "'Tajawal', sans-serif",
-      system: "system-ui, -apple-system, sans-serif",
-      inter: "'Inter', sans-serif"
+      cairo: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
+      tajawal: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
+      system: "system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif",
+      inter: "'Cairo Variable', 'JetBrains Mono Variable', system-ui, sans-serif"
     };
-    const resolvedFont = fontMap[fontFamily] || "'Cairo', sans-serif";
+    const resolvedFont = fontMap[fontFamily] || "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif";
     document.documentElement.style.setProperty('--app-font-family', resolvedFont);
     document.documentElement.style.setProperty('--app-theme-font', resolvedFont);
 
@@ -401,12 +402,14 @@ export const SettingsView: React.FC = () => {
   const handleSaveSecurity = (e: React.FormEvent) => {
     e.preventDefault();
     safeStorage.setItem('set_sec_save_pass', savePasswordPolicy.toString());
-    safeStorage.setItem('set_sec_auto_logout', autoLogoutPolicy.toString());
+    safeStorage.removeItem('set_sec_auto_logout');
     showToast('تم حفظ سياسات الخصوصية والأمان للبرنامج', 'success');
   };
 
-  // TLS Fingerprint Copy State
+  // TLS Fingerprint Copy State & Vault Key Status
   const [copiedFingerprint, setCopiedFingerprint] = useState(false);
+  const [vaultStatus, setVaultStatus] = useState<{ mode?: string; healthy?: boolean; warning?: string | null } | null>(null);
+  const [exportingVaultKey, setExportingVaultKey] = useState(false);
 
   // Operator RBAC Management State (Admin only)
   interface OperatorItem {
@@ -437,23 +440,32 @@ export const SettingsView: React.FC = () => {
       if (res.ok && data.success && Array.isArray(data.operators)) {
         setOperators(data.operators);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn('[SettingsView] fetchOperators failed', err);
     } finally {
       if (isMountedRef.current) setLoadingOperators(false);
     }
   };
 
   useEffect(() => {
-    if (activeCategory === 'security' && isConnected && userRole === 'admin') {
-      fetchOperators();
+    if (activeCategory === 'security') {
+      if (isConnected && userRole === 'admin') {
+        fetchOperators();
+      }
+      if (window.zctrlDesktopVault?.getVaultKeyStatus) {
+        window.zctrlDesktopVault.getVaultKeyStatus()
+          .then((status) => {
+            if (isMountedRef.current && status) setVaultStatus(status);
+          })
+          .catch((err) => console.warn('[SettingsView] getVaultKeyStatus failed', err));
+      }
     }
   }, [activeCategory, isConnected, userRole]);
 
   const handleCreateOperator = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newOpUsername.trim() || !newOpPassword.trim()) {
-      showToast('يرجى إدخال اسم المشغل وكلمة المرور (4 أحرف على الأقل)', 'error');
+    if (!newOpUsername.trim() || newOpPassword.length < 10) {
+      showToast('يرجى إدخال اسم المشغل وكلمة مرور لا تقل عن 10 أحرف', 'error');
       return;
     }
     setCreatingOperator(true);
@@ -545,7 +557,10 @@ export const SettingsView: React.FC = () => {
     secureFetch('/api/telegram/config', { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) return null;
-        return res.json().catch(() => null);
+        return res.json().catch((err) => {
+          console.warn('[SettingsView] telegram config invalid JSON', err);
+          return null;
+        });
       })
       .then((res) => {
         if (!isMountedRef.current || !res) return;
@@ -558,7 +573,11 @@ export const SettingsView: React.FC = () => {
           setTelegramNotifyVouchers(res.data.notifyOnVoucherBatch !== false);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (err?.name !== 'AbortError') {
+          console.warn('[SettingsView] telegram config fetch failed', err);
+        }
+      });
 
     return () => {
       controller.abort();
@@ -586,7 +605,10 @@ export const SettingsView: React.FC = () => {
         }),
         signal: controller.signal
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json().catch((err) => {
+        console.warn('[SettingsView] telegram save invalid JSON', err);
+        return {};
+      });
       if (!isMountedRef.current) return;
       if (res.ok && data.success) {
         showToast('تم حفظ إعدادات إشعارات تيليجرام بنجاح', 'success');
@@ -621,7 +643,10 @@ export const SettingsView: React.FC = () => {
         }),
         signal: controller.signal
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json().catch((err) => {
+        console.warn('[SettingsView] telegram test invalid JSON', err);
+        return {};
+      });
       if (!isMountedRef.current) return;
       if (res.ok && data.success) {
         showToast('تم إرسال رسالة التجربة إلى تيليجرام بنجاح! تفقد محادثة البوت.', 'success');
@@ -702,7 +727,6 @@ export const SettingsView: React.FC = () => {
     setDefaultPrice('5');
     setSyncPriority('adaptive');
     setSavePasswordPolicy(false);
-    setAutoLogoutPolicy(true);
     setCurrency('ر.س');
     setPagingSize('20');
     setTablePaging('20');
@@ -722,9 +746,10 @@ export const SettingsView: React.FC = () => {
 
     // Apply defaults to document root
     document.documentElement.style.setProperty('--app-font-scale', '100%');
+    document.documentElement.style.setProperty('--app-base-font-size', '16px');
     document.documentElement.style.setProperty('--app-watermark-opacity', '0.08');
-    document.documentElement.style.setProperty('--app-font-family', "'Cairo', sans-serif");
-    document.documentElement.style.setProperty('--app-theme-font', "'Cairo', sans-serif");
+    document.documentElement.style.setProperty('--app-font-family', "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif");
+    document.documentElement.style.setProperty('--app-theme-font', "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif");
 
     // Context options
     setAutoSync(true);
@@ -818,7 +843,7 @@ export const SettingsView: React.FC = () => {
     },
     {
       id: 'telegram' as SettingsCategory,
-      title: 'إشعارات بوت تيليجرام ✈️',
+      title: 'إشعارات بوت تيليجرام',
       desc: 'ربط النظام ببوت تيليجرام لإرسال تنبيهات الحرارة والكروت والراوتر فوراً',
       icon: Send,
       color: 'text-sky-400 bg-sky-500/10'
@@ -837,7 +862,7 @@ export const SettingsView: React.FC = () => {
       {/* Page Header */}
       <div>
         <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2.5">
-          <Settings className="w-6 h-6 text-blue-400 animate-spin-slow" />
+          <Settings className="w-6 h-6 text-blue-400" />
           <span>إعدادات النظام والبرنامج الشاملة (System Settings)</span>
         </h1>
         <p className="text-xs text-slate-400 mt-1">
@@ -849,7 +874,7 @@ export const SettingsView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Right column: Categories Menu */}
         <div className="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-2xl p-3 space-y-1.5 shadow-xl">
-          <div className="px-3 py-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+          <div className="px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
             أقسام الإعدادات
           </div>
           {categoriesConfig.map((cat) => {
@@ -860,7 +885,7 @@ export const SettingsView: React.FC = () => {
                 key={cat.id}
                 type="button"
                 onClick={() => setActiveCategory(cat.id)}
-                className={`w-full flex items-start gap-3 p-3 rounded-xl text-right transition-all cursor-pointer ${
+                className={`w-full flex items-start gap-3 p-3 rounded-xl text-start transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   isActive
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/10 font-bold'
                     : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'
@@ -871,7 +896,7 @@ export const SettingsView: React.FC = () => {
                 </div>
                 <div className="min-w-0">
                   <div className="text-xs font-bold">{cat.title}</div>
-                  <div className={`text-[10px] mt-0.5 truncate ${isActive ? 'text-blue-100' : 'text-slate-400'}`}>
+                  <div className={`text-xs mt-0.5 truncate ${isActive ? 'text-blue-100' : 'text-slate-400'}`}>
                     {cat.desc}
                   </div>
                 </div>
@@ -888,7 +913,7 @@ export const SettingsView: React.FC = () => {
               <h2 className="text-sm font-bold text-slate-100">
                 {categoriesConfig.find((c) => c.id === activeCategory)?.title}
               </h2>
-              <p className="text-[11px] text-slate-400 mt-1">
+              <p className="text-xs text-slate-400 mt-1">
                 {categoriesConfig.find((c) => c.id === activeCategory)?.desc}
               </p>
             </div>
@@ -913,7 +938,7 @@ export const SettingsView: React.FC = () => {
               {/* Density & Paging */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                     <Layout className="w-3.5 h-3.5 text-indigo-400" />
                     كثافة وارتفاع أسطر الجداول (Density)
                   </label>
@@ -927,28 +952,28 @@ export const SettingsView: React.FC = () => {
                         key={mode.id}
                         type="button"
                         onClick={() => setTableDensity(mode.id as any)}
-                        className={`p-2.5 rounded-xl border text-center transition-all ${
+                        className={`p-2.5 rounded-xl border text-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                           tableDensity === mode.id
                             ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200 shadow-sm shadow-indigo-500/20'
                             : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
                         }`}
                       >
                         <div className="text-xs font-bold">{mode.label}</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">{mode.desc}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{mode.desc}</div>
                       </button>
                     ))}
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                     <Table className="w-3.5 h-3.5 text-indigo-400" />
                     عدد الصفوف في الصفحة (Pagination Limit)
                   </label>
                   <select
                     value={tablePaging}
                     onChange={(e) => setTablePaging(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus:border-indigo-500"
                   >
                     <option value="15">15 صف لكل صفحة</option>
                     <option value="20">20 صف لكل صفحة (افتراضي)</option>
@@ -957,7 +982,7 @@ export const SettingsView: React.FC = () => {
                     <option value="250">250 صف لكل صفحة (للأجهزة السريعة)</option>
                     <option value="all">عرض الكل بدون تقسيم (قد يؤثر على السرعة)</option>
                   </select>
-                  <p className="text-[10px] text-slate-500">
+                  <p className="text-xs text-slate-400">
                     تقسيم الصفوف يمنع استهلاك ذاكرة المتصفح ويحافظ على سرعة الاستجابة.
                   </p>
                 </div>
@@ -980,7 +1005,7 @@ export const SettingsView: React.FC = () => {
                     />
                     <div>
                       <div className="text-xs font-bold text-slate-300">التمرير الافتراضي (Virtual Scrolling)</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">رسم الصفوف الظاهرة فقط في الشاشة لحماية الرام ومنع التشنج</div>
+                      <div className="text-xs text-slate-400 mt-0.5">رسم الصفوف الظاهرة فقط في الشاشة لحماية الرام ومنع التشنج</div>
                     </div>
                   </label>
 
@@ -993,7 +1018,7 @@ export const SettingsView: React.FC = () => {
                     />
                     <div>
                       <div className="text-xs font-bold text-slate-300">إخفاء كلمات المرور افتراضياً</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">عرض كلمات السر على هيئة نقاط حمايةً للخصوصية أثناء التصفح</div>
+                      <div className="text-xs text-slate-400 mt-0.5">عرض كلمات السر على هيئة نقاط حمايةً للخصوصية أثناء التصفح</div>
                     </div>
                   </label>
 
@@ -1006,7 +1031,7 @@ export const SettingsView: React.FC = () => {
                     />
                     <div>
                       <div className="text-xs font-bold text-slate-300">وميض النبض المباشر (Live Pulse)</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">عرض علامة نبض خضراء متحركة بجوار الجلسات النشطة حالياً</div>
+                      <div className="text-xs text-slate-400 mt-0.5">عرض علامة نبض خضراء بجوار الجلسات النشطة حالياً</div>
                     </div>
                   </label>
                 </div>
@@ -1020,7 +1045,7 @@ export const SettingsView: React.FC = () => {
                       <Table className="w-3.5 h-3.5 text-indigo-400" />
                       إدارة أعمدة جدول المشتركين (14 عمود قياسي)
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
+                    <div className="text-xs text-slate-400 mt-0.5">
                       حدد الأعمدة المطلوب إظهارها في شاشة إدارة المشتركين
                     </div>
                   </div>
@@ -1028,14 +1053,14 @@ export const SettingsView: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleSelectAllColumns}
-                      className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-indigo-300 border border-slate-700/60 transition-colors"
+                      className="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-indigo-300 border border-slate-700/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                     >
                       تحديد الكل (14)
                     </button>
                     <button
                       type="button"
                       onClick={() => setTableVisibleCols(['username', 'password', 'status', 'profile'])}
-                      className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-700/60 transition-colors"
+                      className="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                     >
                       الأعمدة الأساسية فقط
                     </button>
@@ -1058,10 +1083,10 @@ export const SettingsView: React.FC = () => {
                             handleToggleTableColumn(col.key);
                           }
                         }}
-                        className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                        className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                           isChecked
                             ? 'bg-slate-900/90 border-indigo-500/40 text-slate-200 shadow-sm'
-                            : 'bg-slate-950/40 border-slate-800/60 text-slate-500 hover:border-slate-700'
+                            : 'bg-slate-950/40 border-slate-800/60 text-slate-400 hover:border-slate-700'
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
@@ -1072,14 +1097,14 @@ export const SettingsView: React.FC = () => {
                           )}
                           <div className="truncate">
                             <span className="text-xs font-medium block truncate">{col.label}</span>
-                            <span className="text-[10px] text-slate-500 block truncate">{col.tooltip}</span>
+                            <span className="text-xs text-slate-400 block truncate">{col.tooltip}</span>
                           </div>
                         </div>
                         <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded border uppercase shrink-0 ${
+                          className={`text-xs px-1.5 py-0.5 rounded border uppercase shrink-0 ${
                             isChecked
                               ? 'bg-indigo-950/50 text-indigo-300 border-indigo-800/60'
-                              : 'bg-slate-900 text-slate-600 border-slate-800'
+                              : 'bg-slate-900 text-slate-400 border-slate-800'
                           }`}
                         >
                           {col.category}
@@ -1095,7 +1120,7 @@ export const SettingsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleResetTableSettings}
-                  className="px-4 py-2 rounded-xl border border-slate-700 text-xs font-bold text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors flex items-center gap-1.5"
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-xs font-bold text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   استعادة الوضع الافتراضي للجداول
@@ -1103,7 +1128,7 @@ export const SettingsView: React.FC = () => {
 
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-1.5"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
                 >
                   <Save className="w-3.5 h-3.5" />
                   حفظ وتطبيق إعدادات الجداول
@@ -1117,57 +1142,58 @@ export const SettingsView: React.FC = () => {
             <form onSubmit={handleSaveConnection} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">عنوان السيرفر / IP (Host)*</label>
+                  <label className="text-xs font-bold text-slate-300">عنوان السيرفر / IP (Host)*</label>
                   <input
                     type="text"
                     required
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
                     placeholder="مثال: 192.168.88.1 أو test.domain"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">بورت API للاتصال*</label>
+                  <label className="text-xs font-bold text-slate-300">بورت API للاتصال*</label>
                   <input
                     type="number"
                     required
                     value={port}
                     onChange={(e) => setPort(e.target.value)}
                     placeholder="افتراضي: 8728"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">اسم مستخدم الراوتر*</label>
+                  <label className="text-xs font-bold text-slate-300">اسم مستخدم الراوتر*</label>
                   <input
                     type="text"
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="مثال: admin"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
 
                 <div className="space-y-1.5 relative">
-                  <label className="text-[11px] font-bold text-slate-400">كلمة المرور (اختياري للتحديث)</label>
+                  <label className="text-xs font-bold text-slate-300">كلمة المرور (اختياري للتحديث)</label>
                   <div className="relative">
                     <input
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pr-3.5 pl-10 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl ps-3.5 pe-10 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute left-3 top-2 text-slate-500 hover:text-slate-300"
+                      aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                      className="absolute end-3 top-2 text-slate-400 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -1176,11 +1202,11 @@ export const SettingsView: React.FC = () => {
               </div>
 
               <div className="p-3.5 bg-slate-950/40 border border-slate-800 rounded-xl space-y-1.5">
-                <div className="text-[11px] text-amber-400 font-bold flex items-center gap-1.5">
+                <div className="text-xs text-amber-400 font-bold flex items-center gap-1.5">
                   <Lock className="w-3.5 h-3.5" />
                   <span>توضيح الأمان والسرية التامة</span>
                 </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">
+                <p className="text-xs text-slate-400 leading-relaxed">
                   تطبيق ZCtrl يتعامل مباشرة مع راوتر مايكروتك الحقيقي ولا يمرر بياناتك لأي مخدم خارجي. يتم تخزين اسم المستخدم والعنوان محلياً في المتصفح فقط بينما تفاصيل كلمات المرور الحساسة تعامل بجلسات مؤمنة ويتم نسيانها تماماً فور خروجك لحفظ أعلى مستويات الخصوصية للمشتركين والمدراء.
                 </p>
               </div>
@@ -1188,7 +1214,7 @@ export const SettingsView: React.FC = () => {
               {(tlsFingerprint || router?.tlsFingerprint) && (
                 <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
                       <ShieldCheck className="w-4 h-4" />
                       <span>بصمة شهادة TLS الفعلية للراوتر (SHA-256 Pinning)</span>
                     </span>
@@ -1203,7 +1229,7 @@ export const SettingsView: React.FC = () => {
                           if (isMountedRef.current) setCopiedFingerprint(false);
                         }, 2000);
                       }}
-                      className="px-2.5 py-1 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      className="px-2.5 py-1 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                     >
                       {copiedFingerprint ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                       <span>{copiedFingerprint ? 'تم النسخ' : 'نسخ البصمة'}</span>
@@ -1211,22 +1237,22 @@ export const SettingsView: React.FC = () => {
                   </div>
                   <div
                     dir="ltr"
-                    className="p-2 bg-slate-950/80 border border-slate-800 rounded-lg text-[10px] font-mono text-emerald-300 break-all select-all text-left"
+                    className="p-2 bg-slate-950/80 border border-slate-800 rounded-lg text-xs font-mono text-emerald-300 break-all select-all text-left"
                   >
                     {tlsFingerprint || router?.tlsFingerprint}
                   </div>
-                  <p className="text-[10px] text-slate-400">
+                  <p className="text-xs text-slate-400">
                     يمكنك لصق هذه البصمة في حقل &quot;تثبيت شهادة TLS&quot; عند تسجيل الدخول لرفض أي اتصال ينتحل هوية الراوتر.
                   </p>
                 </div>
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800/80">
-                <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                <span className="text-xs text-slate-400 flex items-center gap-1.5">
                   <span>الحالة الحالية:</span>
                   {isConnected ? (
                     <span className="text-emerald-400 font-bold flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
                       <span>متصل بنجاح</span>
                       <span dir="ltr" className="font-mono unicode-isolate text-slate-300">({router?.host})</span>
                     </span>
@@ -1243,15 +1269,15 @@ export const SettingsView: React.FC = () => {
                     type="button"
                     onClick={handleTestAndConnect}
                     disabled={testingConnection || isConnecting}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-emerald-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-emerald-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
                   >
                     <Zap className={`w-4 h-4 text-amber-300 ${testingConnection ? 'animate-spin' : ''}`} />
-                    <span>{testingConnection ? 'جاري الاتصال...' : 'حفظ واختبار الاتصال الآن ⚡'}</span>
+                    <span>{testingConnection ? 'جاري الاتصال...' : 'حفظ واختبار الاتصال الآن'}</span>
                   </button>
 
                   <button
                     type="submit"
-                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                   >
                     <Save className="w-4 h-4" />
                     <span>حفظ البيانات محلياً</span>
@@ -1269,11 +1295,11 @@ export const SettingsView: React.FC = () => {
                     <div>
                       <h4 className="text-xs font-bold text-white flex items-center gap-2">
                         <span>بروفايلات الاتصال المتعددة بالراوتر (منزل، مكتب، فرع)</span>
-                        <span className="text-[10px] text-blue-400 font-mono font-bold bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
+                        <span className="text-xs text-blue-400 font-mono font-bold bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
                           {connectionProfiles.length} بروفايلات
                         </span>
                       </h4>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-400 mt-0.5">
                         حفظ وتفعيل بروفايلات اتصال متعددة للراوتر والتبديل بينها بضغطة زر واحدة دون إعادة كتابة البيانات
                       </p>
                     </div>
@@ -1282,7 +1308,7 @@ export const SettingsView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowProfilesModal(true)}
-                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                   >
                     <Sliders className="w-3.5 h-3.5" />
                     <span>إدارة كافة البروفايلات</span>
@@ -1311,12 +1337,12 @@ export const SettingsView: React.FC = () => {
                             <div className="flex items-center gap-1">
                               <span className="text-xs font-bold text-white truncate block">{p.name}</span>
                               {isCurrent && (
-                                <span className="text-[8px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 font-bold shrink-0">
+                                <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold shrink-0">
                                   متصل
                                 </span>
                               )}
                             </div>
-                            <span className="text-[10px] text-slate-400 font-mono block truncate" dir="ltr">
+                            <span className="text-xs text-slate-400 font-mono block truncate" dir="ltr">
                               {p.host}:{p.port || 8728}
                             </span>
                           </div>
@@ -1332,14 +1358,14 @@ export const SettingsView: React.FC = () => {
                             }
                           }}
                           disabled={isConnecting || isCurrent}
-                          className={`w-full py-1.5 px-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
+                          className={`w-full py-1.5 px-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
                             isCurrent
                               ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 cursor-default'
                               : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md'
                           }`}
                         >
                           <Zap className="w-3 h-3 text-amber-300" />
-                          <span>{isCurrent ? 'البروفايل مفعّل حالياً' : 'تفعيل بضغطة زر ⚡'}</span>
+                          <span>{isCurrent ? 'البروفايل مفعّل حالياً' : 'تفعيل بضغطة زر'}</span>
                         </button>
                       </div>
                     );
@@ -1357,14 +1383,17 @@ export const SettingsView: React.FC = () => {
                 <div className="flex items-center justify-between p-3.5 bg-slate-950/60 border border-slate-800/80 rounded-xl">
                   <div className="space-y-0.5">
                     <div className="text-xs font-bold text-slate-200">تفعيل المزامنة التلقائية اللحظية</div>
-                    <div className="text-[10px] text-slate-500">مزامنة البيانات الحقيقية من المايكروتك دورياً بدون الحاجة لتحديث الصفحة</div>
+                    <div className="text-xs text-slate-400">مزامنة البيانات الحقيقية من المايكروتك دورياً بدون الحاجة لتحديث الصفحة</div>
                   </div>
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={autoSync}
+                    aria-label="تفعيل المزامنة التلقائية اللحظية"
                     onClick={() => setAutoSync(!autoSync)}
-                    className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus:outline-none ${autoSync ? 'bg-emerald-600' : 'bg-slate-800'}`}
+                    className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${autoSync ? 'bg-emerald-600' : 'bg-slate-800'}`}
                   >
-                    <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${autoSync ? 'left-1' : 'left-6.5'}`} />
+                    <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${autoSync ? 'start-1' : 'end-1'}`} />
                   </button>
                 </div>
 
@@ -1372,7 +1401,7 @@ export const SettingsView: React.FC = () => {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs font-bold">
                     <span className="text-slate-300">تردد المزامنة التلقائية للمشتركين (بالثواني)</span>
-                    <span className="text-emerald-400 font-mono text-[11px] font-bold">
+                    <span className="text-emerald-400 font-mono text-xs font-bold">
                       كل {syncFrequency} ثانية {syncFrequency === 15 ? '(الافتراضي المستحسن)' : ''}
                     </span>
                   </div>
@@ -1385,8 +1414,9 @@ export const SettingsView: React.FC = () => {
                       step="1"
                       disabled={!autoSync}
                       value={syncFrequency}
+                      aria-label="تردد المزامنة التلقائية بالثواني"
                       onChange={(e) => setSyncFrequency(Number(e.target.value))}
-                      className="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:opacity-30"
+                      className="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                     />
                     <div className="shrink-0 flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-xl px-2 py-1">
                       <input
@@ -1395,19 +1425,20 @@ export const SettingsView: React.FC = () => {
                         max="300"
                         disabled={!autoSync}
                         value={syncFrequency}
+                        aria-label="عدد ثواني المزامنة"
                         onChange={(e) => setSyncFrequency(Math.max(5, Number(e.target.value)))}
-                        className="w-12 text-center bg-transparent text-xs font-mono font-bold text-emerald-400 focus:outline-none"
+                        className="w-12 text-center bg-transparent text-xs font-mono font-bold text-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
                       />
-                      <span className="text-[11px] text-slate-500">ثانية</span>
+                      <span className="text-xs text-slate-400">ثانية</span>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 pt-1">
-                    <span className="text-[11px] text-slate-400 font-semibold shrink-0">اختيارات سريعة:</span>
+                  <div className="flex items-center gap-2 pt-1 flex-wrap">
+                    <span className="text-xs text-slate-400 font-semibold shrink-0">اختيارات سريعة:</span>
                     <button
                       type="button"
                       onClick={() => setSyncFrequency(15)}
-                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
                         syncFrequency === 15
                           ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
                           : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
@@ -1418,7 +1449,7 @@ export const SettingsView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setSyncFrequency(30)}
-                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
                         syncFrequency === 30
                           ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
                           : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
@@ -1429,7 +1460,7 @@ export const SettingsView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setSyncFrequency(60)}
-                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
                         syncFrequency === 60
                           ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
                           : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
@@ -1442,19 +1473,19 @@ export const SettingsView: React.FC = () => {
 
                 {/* Progressive Sync Priority (المزامنة التدريجية حسب الأهمية) */}
                 <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-400 block">نظام المزامنة التدريجية حسب الأهمية (Progressive Importance)*</label>
+                  <label className="text-xs font-bold text-slate-300 block">نظام المزامنة التدريجية حسب الأهمية (Progressive Importance)*</label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     <button
                       type="button"
                       onClick={() => setSyncPriority('critical')}
-                      className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border text-start transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                         syncPriority === 'critical'
                           ? 'bg-blue-600/10 border-blue-500 text-blue-300 font-bold'
                           : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1">🔥 حرج ولحظي</div>
-                      <div className="text-[9px] text-slate-400 leading-normal">
+                      <div className="text-xs font-bold mb-1">حرج ولحظي</div>
+                      <div className="text-xs text-slate-400 leading-normal">
                         جلب فوري للمستخدمين النشطين وترافيك المنافذ فقط كل 3 ثوان وتأخير السجلات.
                       </div>
                     </button>
@@ -1462,14 +1493,14 @@ export const SettingsView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setSyncPriority('adaptive')}
-                      className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border text-start transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
                         syncPriority === 'adaptive'
                           ? 'bg-emerald-600/10 border-emerald-500 text-emerald-300 font-bold'
                           : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1">⚖️ ذكي ومتوازن</div>
-                      <div className="text-[9px] text-slate-400 leading-normal">
+                      <div className="text-xs font-bold mb-1">ذكي ومتوازن</div>
+                      <div className="text-xs text-slate-400 leading-normal">
                         مزامنة المستخدمين كل 3ث وسجلات النظام كل 10ث لضمان أعلى كفاءة وأقل لود للراوتر.
                       </div>
                     </button>
@@ -1477,14 +1508,14 @@ export const SettingsView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setSyncPriority('low_resource')}
-                      className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border text-start transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
                         syncPriority === 'low_resource'
                           ? 'bg-amber-600/10 border-amber-500 text-amber-300 font-bold'
                           : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1">🔋 توفير معالج الراوتر</div>
-                      <div className="text-[9px] text-slate-400 leading-normal">
+                      <div className="text-xs font-bold mb-1">توفير معالج الراوتر</div>
+                      <div className="text-xs text-slate-400 leading-normal">
                         توسيع تردد كافة المزامنات إلى 15 ثانية لمنع البطء والضغط على راوترات معالجات MIPS.
                       </div>
                     </button>
@@ -1501,11 +1532,11 @@ export const SettingsView: React.FC = () => {
                       <div>
                         <div className="text-xs font-bold text-white flex items-center gap-2 flex-wrap">
                           <span>درع الحماية الحرارية للراوتر (MikroTik Zero-Heat & Thermal Guard)</span>
-                          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                          <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30">
                             حماية العتاد 100%
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">
+                        <p className="text-xs text-slate-400 mt-0.5">
                           يمنع ارتفاع درجة حرارة بوردة ومعالج المايكروتك بنسبة 100% عبر الفواصل الزمنية الدقيقة (Inter-query Pacing) والإيقاف التلقائي للمزامنة عند تصغير المتصفح.
                         </p>
                       </div>
@@ -1514,22 +1545,22 @@ export const SettingsView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setEcoMode(!ecoMode)}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                         ecoMode || thermalShieldActive
                           ? 'bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-950'
                           : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600'
                       }`}
                     >
                       <ShieldCheck className="w-4 h-4" />
-                      <span>{ecoMode || thermalShieldActive ? 'درع التبريد نشط ✓' : 'تفعيل درع التبريد'}</span>
+                      <span>{ecoMode || thermalShieldActive ? 'درع التبريد نشط' : 'تفعيل درع التبريد'}</span>
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-[11px]">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
                     <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
                       <span className="text-slate-400">حرارة المعالج:</span>
                       <span className="font-mono font-bold text-emerald-400">
-                        {router?.cpuTemperature ? `${router.cpuTemperature}°C` : (router?.boardTemperature ? `${router.boardTemperature}°C` : '38°C (طبيعية)')}
+                        {router?.cpuTemperature ? `${router.cpuTemperature}°C` : (router?.boardTemperature ? `${router.boardTemperature}°C` : 'غير متاح')}
                       </span>
                     </div>
 
@@ -1543,7 +1574,7 @@ export const SettingsView: React.FC = () => {
                     <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
                       <span className="text-slate-400">حالة التوفير والخمول:</span>
                       <span className="font-bold text-slate-300">
-                        {isUserIdle ? '💤 خمول ذكي (0% لود)' : '⚡ متفاعل ونشط'}
+                        {isUserIdle ? 'خمول ذكي (0% لود)' : 'متفاعل ونشط'}
                       </span>
                     </div>
                   </div>
@@ -1553,8 +1584,8 @@ export const SettingsView: React.FC = () => {
                 <div className="p-3.5 bg-slate-950/40 border border-slate-800 rounded-xl flex gap-3">
                   <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                   <div className="space-y-0.5">
-                    <div className="text-[11px] text-emerald-400 font-bold">الحماية من المزامنة والبيانات الوهمية</div>
-                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                    <div className="text-xs text-emerald-400 font-bold">الحماية من المزامنة والبيانات الوهمية</div>
+                    <p className="text-xs text-slate-400 leading-relaxed">
                       يضمن ZCtrl خلو جميع القوائم والتقارير من أي مستخدمين وهميين أو بيانات تم إنشاؤها عشوائياً. كل ما تراه يعكس الحالة الراهنة لقاعدة بيانات راوتر المايكروتك الحقيقي، ولا يقوم البرنامج بأي حذف تلقائي من الميكروتك مطلقاً إلا بطلب مباشر وصريح ومؤكد منك.
                     </p>
                   </div>
@@ -1564,7 +1595,7 @@ export const SettingsView: React.FC = () => {
               <div className="flex justify-end pt-3 border-t border-slate-800/80">
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   <Save className="w-4 h-4" />
                   <span>حفظ المزامنة والترددات</span>
@@ -1578,7 +1609,7 @@ export const SettingsView: React.FC = () => {
             <form onSubmit={handleSaveVouchers} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">طول اسم الكود الافتراضي (اسم المستخدم)*</label>
+                  <label className="text-xs font-bold text-slate-300">طول اسم الكود الافتراضي (اسم المستخدم)*</label>
                   <input
                     type="number"
                     min="4"
@@ -1586,56 +1617,56 @@ export const SettingsView: React.FC = () => {
                     required
                     value={defaultLength}
                     onChange={(e) => setDefaultLength(Number(e.target.value))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">البادئة التلقائية للكروت (Prefix)</label>
+                  <label className="text-xs font-bold text-slate-300">البادئة التلقائية للكروت (Prefix)</label>
                   <input
                     type="text"
                     value={defaultPrefix}
                     onChange={(e) => setDefaultPrefix(e.target.value)}
                     placeholder="مثال: ZC-"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">نوع محارف كود البطاقة الافتراضي</label>
+                  <label className="text-xs font-bold text-slate-300">نوع محارف كود البطاقة الافتراضي</label>
                   <select
                     value={defaultCharSet}
                     onChange={(e) => setDefaultCharSet(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
                   >
-                    <option value="numbers">🔢 أرقام فقط (0-9) - الأسهل للمشتركين</option>
-                    <option value="letters">🔤 حروف إنجليزية صغيرة (a-z)</option>
-                    <option value="mixed_lowercase">🔀 حروف صغيرة وأرقام مختلطة</option>
-                    <option value="mixed_uppercase">🔠 حروف كبيرة وأرقام مختلطة</option>
+                    <option value="numbers">أرقام فقط (0-9) - الأسهل للمشتركين</option>
+                    <option value="letters">حروف إنجليزية صغيرة (a-z)</option>
+                    <option value="mixed_lowercase">حروف صغيرة وأرقام مختلطة</option>
+                    <option value="mixed_uppercase">حروف كبيرة وأرقام مختلطة</option>
                   </select>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">السعر التلقائي الافتراضي للكرت (ر.س)</label>
+                  <label className="text-xs font-bold text-slate-300">السعر التلقائي الافتراضي للكرت (ر.س)</label>
                   <input
                     type="number"
                     min="0"
                     value={defaultPrice}
                     onChange={(e) => setDefaultPrice(e.target.value)}
                     placeholder="5"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
               </div>
 
               <div className="p-3.5 bg-slate-950/40 border border-slate-800 rounded-xl space-y-1.5">
-                <div className="text-[11px] text-amber-400 font-bold flex items-center gap-1.5">
+                <div className="text-xs text-amber-400 font-bold flex items-center gap-1.5">
                   <Info className="w-3.5 h-3.5" />
                   <span>تلميح التوليد التلقائي للكروت</span>
                 </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">
+                <p className="text-xs text-slate-400 leading-relaxed">
                   هذه القيم ستصبح الخيارات المعبأة تلقائياً بمجرد فتحك لتبويبة "توليد كروت الهوتسبوت" في استوديو الكروت، مما يسرع دورتك اليومية لإنتاج وتوليد وطباعة الكروت بضغطة زر واحدة بدون تكرار إدخال الطول والسعر وباقي البادئات.
                 </p>
               </div>
@@ -1643,7 +1674,7 @@ export const SettingsView: React.FC = () => {
               <div className="flex justify-end pt-3 border-t border-slate-800/80">
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   <Save className="w-4 h-4" />
                   <span>حفظ إعدادات الكروت</span>
@@ -1661,39 +1692,77 @@ export const SettingsView: React.FC = () => {
                 <div className="flex items-center justify-between p-3.5 bg-slate-950/60 border border-slate-800/80 rounded-xl">
                   <div className="space-y-0.5">
                     <div className="text-xs font-bold text-slate-200">حفظ الإعدادات في متصفحك المحلي (Offline Storage)</div>
-                    <div className="text-[10px] text-slate-500">تذكر تفاصيل الاتصال (عدا كلمة مرور المايكروتك) لسرعة ملء النموذج بالمرة القادمة</div>
+                    <div className="text-xs text-slate-400">تذكر تفاصيل الاتصال (عدا كلمة مرور المايكروتك) لسرعة ملء النموذج بالمرة القادمة</div>
                   </div>
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={savePasswordPolicy}
+                    aria-label="حفظ إعدادات الاتصال محلياً"
                     onClick={() => setSavePasswordPolicy(!savePasswordPolicy)}
-                    className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus:outline-none ${savePasswordPolicy ? 'bg-blue-600' : 'bg-slate-800'}`}
+                    className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${savePasswordPolicy ? 'bg-blue-600' : 'bg-slate-800'}`}
                   >
-                    <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${savePasswordPolicy ? 'left-1' : 'left-6.5'}`} />
+                    <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${savePasswordPolicy ? 'start-1' : 'end-1'}`} />
                   </button>
                 </div>
 
-                {/* Auto Logout policy */}
-                <div className="flex items-center justify-between p-3.5 bg-slate-950/60 border border-slate-800/80 rounded-xl">
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-bold text-slate-200">قطع الاتصال والخروج التلقائي عند إغلاق التبويبة</div>
-                    <div className="text-[10px] text-slate-500">حظر الجلسة المفتوحة وفصلها تماماً بمجرد إغلاق صفحة ZCtrl لمنع الدخول العشوائي</div>
+                {/* Desktop Vault Key Status & Backup */}
+                {(vaultStatus || window.zctrlDesktopVault?.exportVaultKeyBackup) && (
+                  <div className={`p-3.5 rounded-xl border space-y-2.5 ${vaultStatus?.healthy === false ? 'bg-amber-950/20 border-amber-500/40' : 'bg-slate-950/60 border-slate-800/80'}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                          <ShieldCheck className={`w-4 h-4 ${vaultStatus?.healthy === false ? 'text-amber-400' : 'text-emerald-400'}`} />
+                          <span>مفتاح تشفير خزنة سطح المكتب (Vault Encryption Key)</span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {vaultStatus?.warning || 'مفتاح الخزنة مهيأ ومؤمن محلياً لحماية بيانات الاعتماد.'}
+                        </p>
+                      </div>
+                      {window.zctrlDesktopVault?.exportVaultKeyBackup && (
+                        <button
+                          type="button"
+                          disabled={exportingVaultKey}
+                          onClick={async () => {
+                            if (!window.zctrlDesktopVault?.exportVaultKeyBackup) return;
+                            setExportingVaultKey(true);
+                            try {
+                              const res = await window.zctrlDesktopVault.exportVaultKeyBackup();
+                              if (res.success) {
+                                showToast('تم تصدير نسخة احتياطية لمفتاح الخزنة بنجاح', 'success');
+                              } else if (!res.canceled) {
+                                showToast(res.error || 'تعذر تصدير نسخة مفتاح الخزنة', 'error');
+                              }
+                            } catch (err: any) {
+                              showToast(err?.message || 'حدث خطأ أثناء تصدير مفتاح الخزنة', 'error');
+                            } finally {
+                              if (isMountedRef.current) setExportingVaultKey(false);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs font-bold text-emerald-300 border border-emerald-500/30 transition-colors cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                        >
+                          {exportingVaultKey ? 'جاري التصدير...' : 'نسخ احتياطي لمفتاح الخزنة'}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setAutoLogoutPolicy(!autoLogoutPolicy)}
-                    className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus:outline-none ${autoLogoutPolicy ? 'bg-blue-600' : 'bg-slate-800'}`}
-                  >
-                    <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${autoLogoutPolicy ? 'left-1' : 'left-6.5'}`} />
-                  </button>
+                )}
+
+                {/* Explicit session lifecycle policy */}
+                <div className="p-3.5 bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-1">
+                  <div className="text-xs font-bold text-slate-200">سياسة استمرار الجلسة وتسجيل الدخول اليدوي</div>
+                  <div className="text-xs text-slate-400 leading-relaxed">
+                    تبقى جلستك مفتوحة باستمرار طوال تشغيل البرنامج ولا يتم تسجيل الخروج تلقائياً أو بسبب عدم النشاط، وعند فتح التطبيق مجدداً يُطلب تسجيل الدخول يدوياً دائماً دون دخول تلقائي.
+                  </div>
                 </div>
 
                 {/* Confirm on Actions disclaimer */}
                 <div className="p-3.5 bg-slate-950/40 border border-slate-800 rounded-xl space-y-1.5">
-                  <div className="text-[11px] text-amber-400 font-bold flex items-center gap-1.5">
+                  <div className="text-xs text-amber-400 font-bold flex items-center gap-1.5">
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>تأكيد عمليات الحذف الإداري الشديد</span>
                   </div>
-                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                  <p className="text-xs text-slate-400 leading-relaxed">
                     من منطلق الحفاظ الشديد على استقرار السيرفر وسريته، تم تفعيل ميزة "تأكيد الحذف اليدوي" إجبارياً على جميع النوافذ والعمليات. لن يقوم النظام إطلاقاً بحذف أي مستخدم أو بروفايل أو قاعدة بيانات بصورة آلية من الراوتر، ويتم طلب موافقة المدير المباشر وتأكيده يدوياً قبل إرسال أمر الـ RouterOS API.
                   </p>
                 </div>
@@ -1702,7 +1771,7 @@ export const SettingsView: React.FC = () => {
               <div className="flex justify-end pt-3 border-t border-slate-800/80">
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   <Save className="w-4 h-4" />
                   <span>حفظ سياسات الأمان</span>
@@ -1719,16 +1788,16 @@ export const SettingsView: React.FC = () => {
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-white">إدارة المشغلين وصلاحيات الوصول (RBAC)</h4>
-                    <p className="text-[10px] text-slate-400">
+                    <p className="text-xs text-slate-400">
                       إنشاء حسابات كاشير (توليد/طباعة الكروت وفصل الجلسات) أو مراقب (قراءة فقط)
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 text-[11px] bg-slate-950/70 border border-slate-800 px-3 py-1.5 rounded-xl">
+                <div className="flex items-center gap-2 text-xs bg-slate-950/70 border border-slate-800 px-3 py-1.5 rounded-xl">
                   <span className="text-slate-400">الجلسة الحالية:</span>
                   <span className="font-mono font-bold text-white">{operatorName || 'admin'}</span>
                   <span
-                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                    className={`px-2 py-0.5 rounded-md text-xs font-bold border ${
                       userRole === 'admin'
                         ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
                         : userRole === 'cashier'
@@ -1742,7 +1811,7 @@ export const SettingsView: React.FC = () => {
               </div>
 
               {userRole !== 'admin' ? (
-                <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-xl text-[11px] text-amber-300 flex items-center gap-2">
+                <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-xl text-xs text-amber-300 flex items-center gap-2">
                   <Lock className="w-4 h-4 shrink-0" />
                   <span>إدارة حسابات المشغلين وتعديل الصلاحيات متاحة لصلاحية المدير العام (Admin) فقط.</span>
                 </div>
@@ -1761,7 +1830,7 @@ export const SettingsView: React.FC = () => {
                         onChange={(e) => setNewOpUsername(e.target.value)}
                         placeholder="اسم الدخول (مثال: cashier1)"
                         dir="ltr"
-                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                         required
                       />
                       <input
@@ -1769,21 +1838,22 @@ export const SettingsView: React.FC = () => {
                         value={newOpDisplayName}
                         onChange={(e) => setNewOpDisplayName(e.target.value)}
                         placeholder="الاسم المعروض (اختياري)"
-                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                       />
                       <input
                         type="password"
                         value={newOpPassword}
                         onChange={(e) => setNewOpPassword(e.target.value)}
-                        placeholder="كلمة المرور (4+ أحرف)"
+                        placeholder="كلمة المرور (10+ أحرف)"
+                        minLength={10}
                         dir="ltr"
-                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                         required
                       />
                       <select
                         value={newOpRole}
                         onChange={(e) => setNewOpRole(e.target.value as 'admin' | 'cashier' | 'viewer')}
-                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
                       >
                         <option value="cashier">أمين صندوق (Cashier)</option>
                         <option value="viewer">مراقب قراءة فقط (Viewer)</option>
@@ -1794,7 +1864,7 @@ export const SettingsView: React.FC = () => {
                       <button
                         type="submit"
                         disabled={creatingOperator}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                       >
                         <UserPlus className="w-3.5 h-3.5" />
                         <span>{creatingOperator ? 'جاري الإنشاء...' : 'إنشاء حساب المشغل'}</span>
@@ -1812,14 +1882,14 @@ export const SettingsView: React.FC = () => {
                         type="button"
                         onClick={fetchOperators}
                         disabled={loadingOperators}
-                        className="text-[11px] text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+                        className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-1"
                       >
                         <RefreshCw className={`w-3 h-3 ${loadingOperators ? 'animate-spin' : ''}`} />
                         <span>تحديث</span>
                       </button>
                     </div>
                     {operators.length === 0 ? (
-                      <div className="p-4 text-center text-[11px] text-slate-500">
+                      <div className="p-4 text-center text-xs text-slate-400">
                         لا يوجد مشغلون مخصصون بعد. يتم استخدام حساب مدير الراوتر بصلاحية كاملة افتراضياً.
                       </div>
                     ) : (
@@ -1833,9 +1903,9 @@ export const SettingsView: React.FC = () => {
                               <div className="min-w-0">
                                 <div className="font-bold text-white flex items-center gap-2">
                                   <span>{op.displayName}</span>
-                                  <span className="text-[10px] font-mono text-slate-400">({op.username})</span>
+                                  <span className="text-xs font-mono text-slate-400">({op.username})</span>
                                 </div>
-                                <div className="text-[10px] text-slate-500">
+                                <div className="text-xs text-slate-400">
                                   {op.lastLoginAt
                                     ? `آخر دخول: ${new Date(op.lastLoginAt).toLocaleString('ar-EG')}`
                                     : 'لم يسجل الدخول بعد'}
@@ -1845,7 +1915,7 @@ export const SettingsView: React.FC = () => {
 
                             <div className="flex items-center gap-2">
                               <span
-                                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                                className={`px-2 py-0.5 rounded-lg text-xs font-bold border ${
                                   op.role === 'admin'
                                     ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
                                     : op.role === 'cashier'
@@ -1859,7 +1929,7 @@ export const SettingsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => handleToggleOperatorStatus(op)}
-                                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border cursor-pointer transition-colors ${
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold border cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                                   op.disabled
                                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
                                     : 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
@@ -1873,14 +1943,14 @@ export const SettingsView: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleDeleteOperator(op.id)}
-                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[10px] font-bold cursor-pointer"
+                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                                   >
                                     تأكيد الحذف
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => setConfirmDeleteOpId(null)}
-                                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-bold cursor-pointer"
+                                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                                   >
                                     إلغاء
                                   </button>
@@ -1889,8 +1959,9 @@ export const SettingsView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeleteOpId(op.id)}
-                                  className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                                  className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                                   title="حذف المشغل"
+                                  aria-label={`حذف المشغل ${op.displayName}`}
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -1918,13 +1989,14 @@ export const SettingsView: React.FC = () => {
                       <Send className="w-4 h-4 text-sky-400" />
                       <span>تفعيل إشعارات بوت تيليجرام (Telegram Alerts)</span>
                     </label>
-                    <p className="text-[10px] text-slate-400">
+                    <p className="text-xs text-slate-400">
                       إرسال رسائل وتنبيهات فورية ومباشرة إلى جوالك عبر تطبيق تيليجرام
                     </p>
                   </div>
                   <input
                     type="checkbox"
                     checked={telegramEnabled}
+                    aria-label="تفعيل إشعارات بوت تيليجرام"
                     onChange={(e) => setTelegramEnabled(e.target.checked)}
                     className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
                   />
@@ -1933,9 +2005,9 @@ export const SettingsView: React.FC = () => {
                 {/* Token and Chat ID */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                    <label className="text-xs font-bold text-slate-300 flex items-center gap-1">
                       <span>توكن البوت (Bot Token)*</span>
-                      <span className="text-[10px] text-slate-500">(من @BotFather)</span>
+                      <span className="text-xs text-slate-400">(من @BotFather)</span>
                     </label>
                     <div className="relative">
                       <input
@@ -1943,12 +2015,13 @@ export const SettingsView: React.FC = () => {
                         value={telegramBotToken}
                         onChange={(e) => setTelegramBotToken(e.target.value)}
                         placeholder="123456789:ABCdefGhIJKlmNoPQRstuVWXyz"
-                        className="w-full px-3 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono pr-9"
+                        className="w-full px-3 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 font-mono pe-9"
                       />
                       <button
                         type="button"
                         onClick={() => setShowTelegramToken(!showTelegramToken)}
-                        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                        aria-label={showTelegramToken ? 'إخفاء توكن البوت' : 'إظهار توكن البوت'}
+                        className="absolute end-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded"
                       >
                         {showTelegramToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
@@ -1956,23 +2029,23 @@ export const SettingsView: React.FC = () => {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                    <label className="text-xs font-bold text-slate-300 flex items-center gap-1">
                       <span>معرف الدردشة (Chat ID)*</span>
-                      <span className="text-[10px] text-slate-500">(من @userinfobot)</span>
+                      <span className="text-xs text-slate-400">(من @userinfobot)</span>
                     </label>
                     <input
                       type="text"
                       value={telegramChatId}
                       onChange={(e) => setTelegramChatId(e.target.value)}
                       placeholder="مثال: 987654321 أو -1001234567890"
-                      className="w-full px-3 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
+                      className="w-full px-3 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 font-mono"
                     />
                   </div>
                 </div>
 
                 {/* Notification Trigger Toggles */}
                 <div className="p-4 bg-slate-950/50 border border-slate-800/80 rounded-xl space-y-3">
-                  <span className="text-[11px] font-bold text-slate-300 block">أنواع التنبيهات المطلوب إرسالها:</span>
+                  <span className="text-xs font-bold text-slate-300 block">أنواع التنبيهات المطلوب إرسالها:</span>
                   
                   <label className="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:text-white">
                     <span className="flex items-center gap-2">
@@ -2021,7 +2094,7 @@ export const SettingsView: React.FC = () => {
                   type="button"
                   onClick={handleTestTelegram}
                   disabled={testingTelegram}
-                  className="bg-slate-800 hover:bg-slate-700 text-sky-400 text-xs font-bold px-4 py-2.5 rounded-xl border border-sky-500/30 flex items-center gap-2 transition-all cursor-pointer"
+                  className="bg-slate-800 hover:bg-slate-700 text-sky-400 text-xs font-bold px-4 py-2.5 rounded-xl border border-sky-500/30 flex items-center gap-2 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                 >
                   <Send className={`w-3.5 h-3.5 ${testingTelegram ? 'animate-spin' : ''}`} />
                   <span>{testingTelegram ? 'جاري الإرسال...' : 'إرسال رسالة تجربة للبوت'}</span>
@@ -2030,7 +2103,7 @@ export const SettingsView: React.FC = () => {
                 <button
                   type="submit"
                   disabled={savingTelegram}
-                  className="bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-sky-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  className="bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-sky-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                 >
                   <Save className="w-4 h-4" />
                   <span>{savingTelegram ? 'جاري الحفظ...' : 'حفظ إعدادات تيليجرام'}</span>
@@ -2044,7 +2117,7 @@ export const SettingsView: React.FC = () => {
             <form onSubmit={handleSaveApplication} className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1">
                     <Coins className="w-3.5 h-3.5 text-amber-400" />
                     <span>العملة الافتراضية للنظام (Currency)</span>
                   </label>
@@ -2054,19 +2127,19 @@ export const SettingsView: React.FC = () => {
                     value={currency}
                     onChange={(e) => setCurrency(e.target.value)}
                     placeholder="مثال: ر.س، د.ع، $، ل.س"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1">
                     <Sliders className="w-3.5 h-3.5 text-blue-400" />
                     <span>عدد المشتركين في الصفحة (Paging Size)</span>
                   </label>
                   <select
                     value={pagingSize}
                     onChange={(e) => setPagingSize(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
                   >
                     <option value="10">10 مشتركين في الصفحة</option>
                     <option value="20">20 مشترك في الصفحة (موصى به)</option>
@@ -2078,7 +2151,7 @@ export const SettingsView: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1">
                     <Globe className="w-3.5 h-3.5 text-emerald-400" />
                     <span>نطاق تسجيل دخول الهوتسبوت (Hotspot Domain)</span>
                   </label>
@@ -2088,23 +2161,23 @@ export const SettingsView: React.FC = () => {
                     value={hotspotDomain}
                     onChange={(e) => setHotspotDomain(e.target.value)}
                     placeholder="مثال: login.zcontrol.net"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 font-mono"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1">
                     <Layout className="w-3.5 h-3.5 text-purple-400" />
                     <span>كثافة عرض وتخطيط الجداول (Density)</span>
                   </label>
                   <select
                     value={layoutDensity}
                     onChange={(e) => setLayoutDensity(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
                   >
-                    <option value="compact">🔍 متراص (Compact) - عرض بيانات أكثر</option>
-                    <option value="normal">⚖️ طبيعي (Normal) - مريح للعين</option>
-                    <option value="relaxed">📖 واسع (Relaxed) - تصفح متباعد</option>
+                    <option value="compact">متراص (Compact) - عرض بيانات أكثر</option>
+                    <option value="normal">طبيعي (Normal) - مريح للعين</option>
+                    <option value="relaxed">واسع (Relaxed) - تصفح متباعد</option>
                   </select>
                 </div>
               </div>
@@ -2116,21 +2189,24 @@ export const SettingsView: React.FC = () => {
                     <HelpCircle className="w-4 h-4 text-emerald-400" />
                     <span>عرض تلميحات دليل التشغيل في التبويبات الأخرى</span>
                   </div>
-                  <div className="text-[10px] text-slate-500">إظهار تلميحات سريعة أسفل النوافذ لمساعدتك أثناء إدارة الشبكة</div>
+                  <div className="text-xs text-slate-400">إظهار تلميحات سريعة أسفل النوافذ لمساعدتك أثناء إدارة الشبكة</div>
                 </div>
                 <button
                   type="button"
+                  role="switch"
+                  aria-checked={showGuideHints}
+                  aria-label="عرض تلميحات دليل التشغيل في التبويبات الأخرى"
                   onClick={() => setShowGuideHints(!showGuideHints)}
-                  className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus:outline-none ${showGuideHints ? 'bg-blue-600' : 'bg-slate-800'}`}
+                  className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${showGuideHints ? 'bg-blue-600' : 'bg-slate-800'}`}
                 >
-                  <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${showGuideHints ? 'left-1' : 'left-6.5'}`} />
+                  <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${showGuideHints ? 'start-1' : 'end-1'}`} />
                 </button>
               </div>
 
               <div className="flex justify-end pt-3 border-t border-slate-800/80">
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-blue-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   <Save className="w-4 h-4" />
                   <span>حفظ إعدادات البرنامج العامة</span>
@@ -2151,30 +2227,30 @@ export const SettingsView: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-400">نوع خط البرنامج (Font Family)</label>
+                    <label className="text-xs font-bold text-slate-300">نوع خط البرنامج (Font Family)</label>
                     <select
                       value={fontFamily}
                       onChange={(e) => setFontFamily(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 cursor-pointer"
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 cursor-pointer"
                     >
-                      <option value="cairo">خط القاهرة العريض (Cairo Bold - القياسي)</option>
-                      <option value="tajawal">خط تجوال العريض (Tajawal Bold)</option>
+                      <option value="cairo">خط القاهرة المدمج (Cairo Variable - القياسي)</option>
+                      <option value="tajawal">خط القاهرة المرن (Cairo Sans)</option>
                       <option value="system">خط النظام التلقائي (System Sans)</option>
-                      <option value="inter">خط إنتر التقني (Inter Modern)</option>
+                      <option value="inter">خط تقني مدمج (Cairo + JetBrains Mono)</option>
                     </select>
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-400">تكبير وتصغير حشي الواجهة (Font Scale)</label>
+                    <label className="text-xs font-bold text-slate-300">تكبير وتصغير حجم الواجهة (Font Scale)</label>
                     <select
                       value={fontSize}
                       onChange={(e) => setFontSize(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 cursor-pointer"
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 cursor-pointer"
                     >
-                      <option value="85">🔍 صغير جداً (85% - مناسب للمراقبين)</option>
-                      <option value="100">⚖️ قياسي متوازن (100% - الموصى به)</option>
-                      <option value="115">📖 كبير وواضح (115% - سهولة القراءة)</option>
-                      <option value="130">🔎 ضخم جداً (130% - للشاشات البعيدة)</option>
+                      <option value="85">صغير (85% - مناسب للمراقبين)</option>
+                      <option value="100">قياسي متوازن (100% - الموصى به)</option>
+                      <option value="115">كبير وواضح (115% - سهولة القراءة)</option>
+                      <option value="130">ضخم (130% - للشاشات البعيدة)</option>
                     </select>
                   </div>
                 </div>
@@ -2191,12 +2267,12 @@ export const SettingsView: React.FC = () => {
                   <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded-xl">
                     <div className="space-y-0.5">
                       <div className="text-xs font-bold text-slate-200">شفافية شعار خلفية البرنامج (Logo Watermark)</div>
-                      <div className="text-[10px] text-slate-500">إظهار شعار ZC المجسم بشكل خفيف في خلفية مساحة العمل</div>
+                      <div className="text-xs text-slate-400">إظهار شعار ZC المجسم بشكل خفيف في خلفية مساحة العمل</div>
                     </div>
                     <select
                       value={watermarkOpacity}
                       onChange={(e) => setWatermarkOpacity(e.target.value)}
-                      className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-pink-500 cursor-pointer"
+                      className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 cursor-pointer"
                     >
                       <option value="0">مخفي (0%)</option>
                       <option value="0.05">خفيف جداً (5%)</option>
@@ -2208,14 +2284,17 @@ export const SettingsView: React.FC = () => {
                   <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded-xl">
                     <div className="space-y-0.5">
                       <div className="text-xs font-bold text-slate-200">حركة تحول ألوان اسم وشعار ZCTRL</div>
-                      <div className="text-[10px] text-slate-500">تغيير الألوان بسلاسة حركية كل ثانية للعنوان والأيقونة</div>
+                      <div className="text-xs text-slate-400">تغيير الألوان بسلاسة حركية كل ثانية للعنوان والأيقونة</div>
                     </div>
                     <button
                       type="button"
+                      role="switch"
+                      aria-checked={colorAnimation}
+                      aria-label="حركة تحول ألوان اسم وشعار ZCTRL"
                       onClick={() => setColorAnimation(!colorAnimation)}
-                      className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus:outline-none ${colorAnimation ? 'bg-pink-600' : 'bg-slate-800'}`}
+                      className={`w-12 h-6.5 rounded-full p-1 transition-colors relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 ${colorAnimation ? 'bg-pink-600' : 'bg-slate-800'}`}
                     >
-                      <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${colorAnimation ? 'left-1' : 'left-6.5'}`} />
+                      <span className={`block w-4.5 h-4.5 bg-white rounded-full transition-all duration-200 absolute top-1 ${colorAnimation ? 'start-1' : 'end-1'}`} />
                     </button>
                   </div>
                 </div>
@@ -2225,7 +2304,7 @@ export const SettingsView: React.FC = () => {
               <div className="flex justify-end pt-3 border-t border-slate-800/80">
                 <button
                   type="submit"
-                  className="bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-pink-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  className="bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-pink-500/30 flex items-center gap-1.5 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400"
                 >
                   <Save className="w-4 h-4" />
                   <span>تطبيق وتحديث مظهر ZCTRL الآن</span>
@@ -2239,10 +2318,10 @@ export const SettingsView: React.FC = () => {
             <div className="p-4 bg-red-950/20 border border-red-900/30 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1">
                 <h3 className="text-xs font-bold text-red-400 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 animate-bounce" />
+                  <AlertTriangle className="w-4 h-4" />
                   <span>منطقة الإجراءات الحاسمة (Dangerous Zone)</span>
                 </h3>
-                <p className="text-[10px] text-slate-400 max-w-lg leading-relaxed">
+                <p className="text-xs text-slate-400 max-w-lg leading-relaxed">
                   إذا واجهت أي مشاكل بالمزامنة أو ترغب بإعادة إعدادات البرنامج (تردد المزامنة، قيم توليد كروت الهوتسبوت، التفضيلات العامة) إلى قيم المصنع الأصلية الفورية.
                 </p>
               </div>
@@ -2250,7 +2329,7 @@ export const SettingsView: React.FC = () => {
               <button
                 type="button"
                 onClick={handleRestoreDefaults}
-                className="bg-red-950 hover:bg-red-900 text-red-300 hover:text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-red-800/40 flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+                className="bg-red-950 hover:bg-red-900 text-red-300 hover:text-white text-xs font-bold px-4 py-2.5 rounded-xl border border-red-800/40 flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>إعادة إعدادات البرنامج الافتراضية</span>

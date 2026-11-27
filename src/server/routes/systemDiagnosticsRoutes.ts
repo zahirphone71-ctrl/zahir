@@ -2,7 +2,8 @@ import { Router, type Request, type Response } from "express";
 import crypto from "crypto";
 import {
   createMikrotikClient,
-  MikrotikAPI as MikrotikAPI_Original
+  MikrotikAPI as MikrotikAPI_Original,
+  TlsPinningError
 } from "../mikrotik-api.ts";
 import { discoverMikrotikRouters } from "../mndp-discover.ts";
 import { translateErrorMessage } from "../../lib/errorTranslator.ts";
@@ -15,19 +16,26 @@ import {
   discoverManagementPortsAndIpsApi
 } from "./securityAuditorRouter.ts";
 import { telegramAlertService } from "../telegram-service.ts";
+import { deleteRouterMutex } from "../mutex.ts";
 import {
   securityConfig,
   resolveRequestToken,
+  resolveRequestTokenWithSource,
+  setSessionCookie,
+  clearSessionCookie,
+  verifyCookieCsrf,
   encryptSecret
 } from "../security-shield.ts";
 import { RevertJournalSweeper } from "../domain/RevertJournalSweeper.ts";
 import { AuditHashChain } from "../domain/AuditHashChain.ts";
+import { appLogger } from "../rotatingLogger.ts";
 import { ChangeEngine } from "../domain/ChangeEngine.ts";
 import { rbacService, recordAudit, isValidRole, type OperatorRole } from "../rbac.ts";
 import {
   routerClients,
   getLatestActiveClient,
   setLatestActiveClient,
+  touchRouterSession,
   MikrotikAPI,
   realtimeSyncServer,
   invalidateCache,
@@ -45,6 +53,7 @@ import {
 } from "../runtimeContext.ts";
 import {
   runActivePingProbe,
+  previewRouterPingFastLaneRules,
   getRouterPingFastLaneStatus,
   applyRouterPingFastLane,
   removeRouterPingFastLane,
@@ -101,9 +110,58 @@ router.post("/api/security/settings", (req: Request, res: Response) => {
   });
 });
 
+function isLoopbackRequest(req: Request): boolean {
+  const addr = String(req.ip || req.socket?.remoteAddress || "").trim();
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
 // ==========================================
 // RBAC OPERATOR MANAGEMENT ENDPOINTS
 // ==========================================
+router.get("/api/auth/bootstrap-status", (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    needsInitialAdmin: !rbacService.hasCustomOperators(),
+    isLoopback: isLoopbackRequest(req)
+  });
+});
+
+router.post("/api/auth/bootstrap-admin", (req: Request, res: Response) => {
+  if (rbacService.hasCustomOperators()) {
+    return res.status(403).json({
+      success: false,
+      message: "تم إعداد حساب المدير الأول مسبقاً"
+    });
+  }
+  if (process.env.NODE_ENV === "production" && !isLoopbackRequest(req)) {
+    return res.status(403).json({
+      success: false,
+      message: "يجب إنشاء المدير الأول من الجهاز المحلي (127.0.0.1) فقط"
+    });
+  }
+  try {
+    const { username, password, displayName } = req.body || {};
+    const created = rbacService.createOperator({
+      username: sanitizeInput(username),
+      password: String(password || ""),
+      // Server-side enforcement: initial bootstrap user is strictly admin regardless of payload
+      role: "admin",
+      displayName: displayName ? sanitizeInput(displayName) : undefined
+    });
+    recordAudit(req, "bootstrap_admin", "rbac_operators", "success", {
+      resourceId: created.id,
+      changes: { before: null, after: { username: created.username, role: "admin" } }
+    });
+    return res.status(201).json({
+      success: true,
+      message: `تم إنشاء حساب المدير الأول (${created.username}) بنجاح`,
+      operator: created
+    });
+  } catch (e: any) {
+    return res.status(400).json({ success: false, message: e?.message || "تعذر إنشاء حساب المدير الأول" });
+  }
+});
+
 router.get("/api/auth/me", (req: Request, res: Response) => {
   const token = resolveRequestToken(req);
   const session = token ? routerClients.get(token) : undefined;
@@ -150,12 +208,13 @@ router.post("/api/auth/operators", (req: Request, res: Response) => {
 
 router.put("/api/auth/operators/:id", (req: Request, res: Response) => {
   try {
-    const { role, displayName, password, disabled } = req.body || {};
+    const { role, displayName, password, disabled, unlock } = req.body || {};
     const updated = rbacService.updateOperator(String(req.params.id), {
       role: role !== undefined && isValidRole(role) ? (role as OperatorRole) : undefined,
       displayName: displayName !== undefined ? sanitizeInput(displayName) : undefined,
       password: password ? String(password) : undefined,
-      disabled: typeof disabled === "boolean" ? disabled : undefined
+      disabled: typeof disabled === "boolean" ? disabled : undefined,
+      unlock: typeof unlock === "boolean" ? unlock : undefined
     });
     recordAudit(req, "update_operator", "rbac_operators", "success", {
       resourceId: updated.id,
@@ -182,14 +241,7 @@ router.delete("/api/auth/operators/:id", (req: Request, res: Response) => {
   return res.json({ success: true, message: "تم حذف المشغل بنجاح" });
 });
 
-// API: Health & Ping
-router.get("/api/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", app: "ZCtrl", timestamp: Date.now(), memory: getMemoryHealth() });
-});
-
-router.get("/api/ping", (_req: Request, res: Response) => {
-  res.json({ success: true, app: "ZCtrl", timestamp: Date.now() });
-});
+// Health & Ping endpoints are served centrally by server.ts (/api/health, /api/ping)
 
 // ==========================================
 // TELEGRAM BOT NOTIFICATIONS & ALERTS
@@ -276,7 +328,7 @@ router.post("/api/mikrotik/diagnose", async (req: Request, res: Response) => {
   }
 });
 
-// API: Connect (Strict Real Admin Authentication + Optional TLS Pinning & RBAC Operator Role)
+// API: Connect (Strict Real Admin Authentication + TOFU TLS Pinning & Mandatory RBAC Operator Role)
 router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
   const {
     host,
@@ -284,36 +336,71 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
     username,
     password,
     useSsl = false,
-    strictTls = false,
+    strictTls = true,
     tlsFingerprint,
+    acceptTlsFingerprint = false,
     operatorUsername,
     operatorPassword
-  } = req.body;
+  } = req.body || {};
+
   if (!username || !String(username).trim()) {
-    return res.status(200).json({ success: false, message: "يجب إدخال اسم المستخدم الخاص بمدير الراوتر (admin)" });
+    return res.status(400).json({ success: false, message: "يجب إدخال اسم المستخدم الخاص بمدير الراوتر (admin)" });
   }
 
-  // Optional Operator RBAC verification prior to router handshake
+  // Mandatory Operator RBAC verification once any operator exists;
+  // initial bootstrap allows operator-less connect only from loopback in setup mode.
   let assignedRole: OperatorRole = "admin";
   let assignedOperatorId = "root-admin";
   let assignedOperatorName = String(username).trim();
 
-  if (operatorUsername && String(operatorUsername).trim()) {
-    const op = rbacService.authenticateOperator(String(operatorUsername), String(operatorPassword || ""));
-    if (!op) {
+  const hasOperators = rbacService.hasCustomOperators();
+  const cleanOperatorUser = String(operatorUsername || "").trim();
+
+  if (hasOperators && !cleanOperatorUser) {
+    return res.status(401).json({
+      success: false,
+      reasonType: "auth",
+      message: "تسجيل دخول المشغل مطلوب"
+    });
+  }
+
+  if (!hasOperators && !cleanOperatorUser && process.env.NODE_ENV === "production" && !isLoopbackRequest(req)) {
+    return res.status(401).json({
+      success: false,
+      reasonType: "auth",
+      message: "تسجيل دخول المشغل مطلوب عند الاتصال من خارج الجهاز المحلي (127.0.0.1)"
+    });
+  }
+
+  if (cleanOperatorUser) {
+    const authRes = rbacService.authenticateOperatorDetailed(cleanOperatorUser, String(operatorPassword || ""));
+    if (!authRes.operator) {
+      if (authRes.locked) {
+        recordAudit(req, "operator_login_locked", "auth", "failure", {
+          reason: `قفل مؤقت لحساب المشغل (${sanitizeInput(cleanOperatorUser)})`
+        });
+        return res.status(423).json({
+          success: false,
+          reasonType: "auth",
+          locked: true,
+          remainingLockSeconds: authRes.remainingLockSeconds,
+          message: `تم قفل الحساب مؤقتاً بسبب تكرار المحاولات الفاشلة. يرجى الانتظار ${Math.ceil((authRes.remainingLockSeconds || 60) / 60)} دقيقة.`
+        });
+      }
       recordAudit(req, "operator_login_failed", "auth", "failure", {
-        reason: `فشل مصادقة المشغل (${sanitizeInput(operatorUsername)})`
+        reason: `فشل مصادقة المشغل (${sanitizeInput(cleanOperatorUser)})`
       });
-      return res.status(200).json({
+      return res.status(401).json({
         success: false,
         reasonType: "auth",
         message: "اسم المشغل أو كلمة مرور المشغل غير صحيحة أو الحساب معطل",
         suggestion: "تحقق من بيانات المشغل في تبويب الإعدادات -> الأمان والصلاحيات."
       });
     }
-    assignedRole = op.role;
-    assignedOperatorId = op.id;
-    assignedOperatorName = op.displayName || op.username;
+    // Role comes strictly from server-side RBAC record
+    assignedRole = authRes.operator.role;
+    assignedOperatorId = authRes.operator.id;
+    assignedOperatorName = authRes.operator.displayName || authRes.operator.username;
   }
 
   const targetHost = host ? String(host).trim() : "192.168.88.1";
@@ -323,8 +410,9 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
   try {
     const client = createMikrotikClient();
     await client.connect(targetHost, username, password, targetPort, useSsl, {
-      strictTls: Boolean(strictTls),
-      tlsFingerprint: cleanExpectedFp
+      strictTls: strictTls !== false,
+      tlsFingerprint: cleanExpectedFp,
+      trustOnFirstUse: Boolean(acceptTlsFingerprint)
     });
 
     let cachedRes = typeof client.getCachedResource === 'function' ? client.getCachedResource() : null;
@@ -341,7 +429,9 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
         if (resInfo && resInfo[0]) cachedRes = resInfo[0];
         if (idRes && idRes[0]?.name) routerIdentity = idRes[0].name;
         if (boardRes && boardRes[0]?.['board-name']) routerBoard = boardRes[0]['board-name'];
-      } catch {}
+      } catch (err: any) {
+        appLogger.warn('Diagnostics', 'Connect telemetry prefetch failed', { host: targetHost, error: err?.message });
+      }
     }
 
     const peerFingerprint = typeof client.getPeerTlsFingerprint === "function" ? client.getPeerTlsFingerprint() : null;
@@ -369,7 +459,8 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
       }
     });
 
-    const internetStatus = { hasInternet: true, gateway: '', wanIp: '', pingMs: 15 };
+    const internetStatus = { hasInternet: true, gateway: '', wanIp: '', pingMs: 0 };
+    setSessionCookie(req, res, token);
 
     return res.json({
       success: true,
@@ -391,7 +482,7 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
         hasInternet: true,
         gateway: "",
         wanIp: "",
-        pingMs: 15,
+        pingMs: 0,
         tlsFingerprint: peerFingerprint || undefined,
         connectedAt: new Date().toISOString()
       },
@@ -408,8 +499,20 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
 
     let reasonType = 'network';
     let suggestion = 'تأكد من اتصالك بالشبكة وصحة عنوان الـ IP والمنفذ.';
+    let pendingFingerprint: string | undefined;
+    let pinnedFingerprint: string | undefined;
 
-    if (rawMsg.includes('بصمة') || rawMsg.toLowerCase().includes('fingerprint') || rawMsg.toLowerCase().includes('tls')) {
+    if (err instanceof TlsPinningError || err?.code === 'TLS_UNTRUSTED_TOFU' || err?.code === 'TLS_FINGERPRINT_MISMATCH') {
+      pendingFingerprint = err.actualFingerprint;
+      pinnedFingerprint = err.pinnedFingerprint;
+      if (err.code === 'TLS_UNTRUSTED_TOFU') {
+        reasonType = 'tls_untrusted_tofu';
+        suggestion = 'شهادة API-SSL ذاتية التوقيع غير مثبتة بعد. تحقق من البصمة وأكد الثقة لتثبيتها قبل تسجيل الدخول.';
+      } else {
+        reasonType = 'tls_pinning';
+        suggestion = 'بصمة شهادة الـ SSL للراوتر لا تطابق البصمة المثبتة (TLS Pinning). تحقق من عدم وجود وسيط (MitM) أو حدّث البصمة.';
+      }
+    } else if (rawMsg.includes('بصمة') || rawMsg.toLowerCase().includes('fingerprint') || rawMsg.toLowerCase().includes('tls')) {
       reasonType = 'tls_pinning';
       suggestion = 'بصمة شهادة الـ SSL للراوتر لا تطابق البصمة المثبتة (TLS Pinning). تحقق من الشهادة أو حدّث البصمة.';
     } else if (rawMsg.includes('صلاحيات') || rawMsg.toLowerCase().includes('permission') || rawMsg.toLowerCase().includes('admin / full')) {
@@ -432,6 +535,8 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
       rawError: rawMsg,
       reasonType,
       suggestion,
+      pendingFingerprint,
+      pinnedFingerprint,
       host: targetHost,
       port: targetPort
     });
@@ -441,7 +546,10 @@ router.post("/api/mikrotik/connect", async (req: Request, res: Response) => {
 // API: Cancel / Disconnect Connection Attempt
 router.post("/api/mikrotik/cancel-connect", async (req: Request, res: Response) => {
   try {
-    const token = resolveRequestToken(req);
+    const { token, source } = resolveRequestTokenWithSource(req);
+    if (source === "cookie" && !verifyCookieCsrf(req)) {
+      return res.status(403).json({ success: false, message: "فشل التحقق الأمني للطلب" });
+    }
     if (token) {
       const session = routerClients.get(token);
       if (session) {
@@ -449,9 +557,14 @@ router.post("/api/mikrotik/cancel-connect", async (req: Request, res: Response) 
           if (session.client && typeof session.client.disconnect === "function") {
             await session.client.disconnect();
           }
-        } catch {}
+        } catch (err: any) {
+          appLogger.warn('Diagnostics', 'Cancel-connect disconnect failed', { error: err?.message });
+        }
         if (getLatestActiveClient() === session.client) {
           setLatestActiveClient(null);
+        }
+        if (session.host) {
+          deleteRouterMutex(session.host);
         }
         routerClients.delete(token);
       }
@@ -461,8 +574,10 @@ router.post("/api/mikrotik/cancel-connect", async (req: Request, res: Response) 
       }
       await MikrotikAPI_Original.disconnect();
     }
+    clearSessionCookie(req, res);
     return res.json({ success: true, message: "تم إلغاء محاولة الاتصال بنجاح" });
   } catch (err: any) {
+    clearSessionCookie(req, res);
     return res.json({ success: true, message: "تم إيقاف الاتصال" });
   }
 });
@@ -471,6 +586,9 @@ router.post("/api/mikrotik/cancel-connect", async (req: Request, res: Response) 
 router.get("/api/mikrotik/session", async (req: Request, res: Response) => {
   const token = resolveRequestToken(req);
   const session = token ? routerClients.get(token) : undefined;
+  if (token && session) {
+    touchRouterSession(token);
+  }
   const fallbackClient = getLatestActiveClient();
   const client =
     req.routerClient ||
@@ -524,7 +642,33 @@ router.get("/api/mikrotik/session", async (req: Request, res: Response) => {
           }
         });
       }
-    } catch {}
+    } catch (err: any) {
+      appLogger.warn('Diagnostics', 'Session ensureConnected warning', { error: err?.message });
+    }
+  }
+
+  // If authenticated session still exists while router link is temporarily down, preserve login session
+  if (session && token) {
+    const config = session.client?.currentConfig || session;
+    const tlsFp = session.tlsFingerprint || null;
+    return res.json({
+      success: true,
+      connected: false,
+      reconnecting: true,
+      token,
+      role: session.role || "admin",
+      operatorName: session.operatorName || session.user || "admin",
+      tlsFingerprint: tlsFp,
+      router: {
+        host: config.host || session.host || "192.168.88.1",
+        port: config.port || 8728,
+        username: config.user || session.user || "admin",
+        boardName: session.client?.boardName || "RouterBOARD",
+        version: session.client?.routerVersion || "RouterOS",
+        majorVersion: session.client?.routerMajorVersion || 7,
+        tlsFingerprint: tlsFp || undefined
+      }
+    });
   }
 
   return res.json({ success: false, connected: false, message: "لا توجد جلسة اتصال نشطة" });
@@ -631,13 +775,34 @@ router.get("/api/mikrotik/data/sync/system", async (req: Request, res: Response)
 router.get("/api/mikrotik/data/sync/hotspot", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
+  const activeOnly = req.query.activeOnly === 'true';
   try {
+    if (activeOnly) {
+      const activeHotspotUsers = await fetchSafeCached(
+        '/ip/hotspot/active/print',
+        ['.proplist=.id,user,address,mac-address,uptime,bytes-in,bytes-out,login-by,comment'],
+        5000,
+        client,
+        force
+      ).catch(() => []);
+      const mappedActiveUsers = Array.isArray(activeHotspotUsers)
+        ? activeHotspotUsers.map(normalizeActiveHotspotUser).filter(Boolean)
+        : [];
+      return res.json({
+        success: true,
+        data: {
+          notModifiedUsers: true,
+          activeHotspotUsers: mappedActiveUsers
+        }
+      });
+    }
+
     const [activeHotspotUsers, hotspotUsers, hotspotProfilesRaw, ipBindings, umData] = await Promise.all([
-      fetchSafeCached('/ip/hotspot/active/print', ['.proplist=.id,user,address,mac-address,uptime,bytes-in,bytes-out,login-by,comment'], 4000, client, force).catch(() => []),
+      fetchSafeCached('/ip/hotspot/active/print', ['.proplist=.id,user,address,mac-address,uptime,bytes-in,bytes-out,login-by,comment'], 5000, client, force).catch(() => []),
       fetchSafeCached('/ip/hotspot/user/print', ['=.proplist=.id,name,password,profile,uptime,bytes-in,bytes-out,limit-uptime,limit-bytes-total,comment,disabled,mac-address,email,server'], 180000, client, force).catch(() => []),
       fetchSafeCached('/ip/hotspot/user/profile/print', undefined, 30000, client, force).catch(() => []),
       fetchSafeCached('/ip/hotspot/ip-binding/print', undefined, 20000, client, force).catch(() => []),
-      fetchComprehensiveUsermanData(client).catch(() => ({ users: [], profiles: [], active: [] }))
+      fetchComprehensiveUsermanData(client, force).catch(() => ({ users: [], profiles: [], active: [] }))
     ]);
 
     // Calculate lightweight delta signature for hotspot users
@@ -649,26 +814,28 @@ router.get("/api/mikrotik/data/sync/hotspot", async (req: Request, res: Response
     const clientUserHash = req.query.userHash as string;
     const isUserDeltaMatch = !force && Boolean(clientUserHash && clientUserHash === userSignature);
 
-    const mappedUsers = (Array.isArray(hotspotUsers) ? hotspotUsers : []).map((u: any) => ({
-      id: u?.['.id'] || u?.id || u?.name || `u-${Date.now()}`,
-      name: u?.name || "مستخدم غير مسمى",
-      password: u?.password || "",
-      profile: u?.profile || "default",
-      uptime: u?.uptime || "0s",
-      bytesIn: parseInt(u?.['bytes-in'] || "0", 10) || 0,
-      bytesOut: parseInt(u?.['bytes-out'] || "0", 10) || 0,
-      limitUptime: u?.['limit-uptime'] || "",
-      limitBytesTotal: parseInt(u?.['limit-bytes-total'] || "0", 10) || 0,
-      comment: u?.comment || "",
-      disabled: u?.disabled === "true" || u?.disabled === true || u?.disabled === "yes",
-      macAddress: u?.['mac-address'] || "",
-      email: u?.email || "",
-      server: u?.server || "all",
-      routes: u?.routes || "",
-      lastLoggedOut: u?.['last-logged-out'] || u?.lastLoggedOut || "",
-      lastLoggedIn: u?.['last-logged-in'] || u?.lastLoggedIn || "",
-      raw: u
-    }));
+    const mappedUsers = isUserDeltaMatch
+      ? undefined
+      : (Array.isArray(hotspotUsers) ? hotspotUsers : []).map((u: any) => ({
+          id: u?.['.id'] || u?.id || u?.name || `u-${Date.now()}`,
+          name: u?.name || "مستخدم غير مسمى",
+          password: u?.password || "",
+          profile: u?.profile || "default",
+          uptime: u?.uptime || "0s",
+          bytesIn: parseInt(u?.['bytes-in'] || "0", 10) || 0,
+          bytesOut: parseInt(u?.['bytes-out'] || "0", 10) || 0,
+          limitUptime: u?.['limit-uptime'] || "",
+          limitBytesTotal: parseInt(u?.['limit-bytes-total'] || "0", 10) || 0,
+          comment: u?.comment || "",
+          disabled: u?.disabled === "true" || u?.disabled === true || u?.disabled === "yes",
+          macAddress: u?.['mac-address'] || "",
+          email: u?.email || "",
+          server: u?.server || "all",
+          routes: u?.routes || "",
+          lastLoggedOut: u?.['last-logged-out'] || u?.lastLoggedOut || "",
+          lastLoggedIn: u?.['last-logged-in'] || u?.lastLoggedIn || "",
+          raw: u
+        }));
 
     const mappedActiveUsers = (Array.isArray(activeHotspotUsers) ? activeHotspotUsers.map(normalizeActiveHotspotUser).filter(Boolean) : []);
 
@@ -677,9 +844,9 @@ router.get("/api/mikrotik/data/sync/hotspot", async (req: Request, res: Response
     res.json({
       success: true,
       data: {
-        notModifiedUsers: false,
+        notModifiedUsers: isUserDeltaMatch,
         userHash: userSignature,
-        hotspotUsers: mappedUsers,
+        ...(mappedUsers !== undefined ? { hotspotUsers: mappedUsers } : {}),
         activeHotspotUsers: mappedActiveUsers,
         hotspotProfiles: mappedProfiles,
         usermanUsers: umData?.users || [],
@@ -695,10 +862,28 @@ router.get("/api/mikrotik/data/sync/hotspot", async (req: Request, res: Response
 router.get("/api/mikrotik/data/sync/ppp", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
+  const activeOnly = req.query.activeOnly === 'true';
   try {
+    if (activeOnly) {
+      const active = await fetchSafeCached(
+        '/ppp/active/print',
+        ['.proplist=.id,name,service,caller-id,address,uptime,encoding'],
+        5000,
+        client,
+        force
+      ).catch(() => []);
+      return res.json({
+        success: true,
+        data: {
+          notModifiedSecrets: true,
+          active: Array.isArray(active) ? active : []
+        }
+      });
+    }
+
     const [secrets, active, profilesRaw] = await Promise.all([
       fetchSafeCached('/ppp/secret/print', ['.proplist=.id,name,password,profile,service,caller-id,remote-address,comment,disabled'], 180000, client, force),
-      fetchSafeCached('/ppp/active/print', ['.proplist=.id,name,service,caller-id,address,uptime,encoding'], 4000, client, force),
+      fetchSafeCached('/ppp/active/print', ['.proplist=.id,name,service,caller-id,address,uptime,encoding'], 5000, client, force),
       fetchSafeCached('/ppp/profile/print', undefined, 30000, client, force)
     ]);
 
@@ -707,13 +892,16 @@ router.get("/api/mikrotik/data/sync/ppp", async (req: Request, res: Response) =>
     const lastSecretId = secretCount > 0 ? (secrets[secretCount - 1]?.['.id'] || secrets[secretCount - 1]?.name || '') : '';
     const secretSignature = `ppp-${secretCount}-${firstSecretId}-${lastSecretId}`;
 
+    const clientSecretHash = req.query.secretHash as string;
+    const isSecretDeltaMatch = !force && Boolean(clientSecretHash && clientSecretHash === secretSignature);
+
     const profiles = (Array.isArray(profilesRaw) ? profilesRaw : []).map(normalizePPPProfile);
     res.json({
       success: true,
       data: {
-        notModifiedSecrets: false,
+        notModifiedSecrets: isSecretDeltaMatch,
         secretHash: secretSignature,
-        secrets: Array.isArray(secrets) ? secrets : [],
+        ...(isSecretDeltaMatch ? {} : { secrets: Array.isArray(secrets) ? secrets : [] }),
         active: Array.isArray(active) ? active : [],
         profiles
       }
@@ -728,8 +916,8 @@ router.get("/api/mikrotik/data/sync/ppp", async (req: Request, res: Response) =>
 // ==========================================
 router.get("/api/mikrotik/data/stream/subscribers", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) {
-    return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) {
+    return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
 
   const domain = (req.query.domain as string) || 'hotspot'; // 'hotspot' | 'ppp' | 'userman'
@@ -844,17 +1032,20 @@ router.get("/api/mikrotik/data/stream/subscribers", async (req: Request, res: Re
 router.get("/api/mikrotik/data/sync/network", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
+  const includeLogs = req.query.includeLogs === 'true';
   try {
     const [queuesRaw, leasesRaw, firewall, logsRaw] = await Promise.all([
       fetchSafeCached('/queue/simple/print', undefined, 25000, client, force),
       fetchSafeCached('/ip/dhcp-server/lease/print', undefined, 20000, client, force),
       fetchSafeCached('/ip/firewall/filter/print', undefined, 30000, client, force),
-      fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 15000, client, force)
+      includeLogs
+        ? fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 60000, client, force)
+        : Promise.resolve(null)
     ]);
     const queues = (Array.isArray(queuesRaw) ? queuesRaw : []).map(normalizeSimpleQueue);
     const leases = (Array.isArray(leasesRaw) ? leasesRaw.map(normalizeDhcpLease) : []).filter(Boolean);
-    const logs = (Array.isArray(logsRaw) ? logsRaw : []).slice(-30).reverse();
-    res.json({ success: true, data: { queues, leases, firewall: Array.isArray(firewall) ? firewall : [], logs } });
+    const logs = Array.isArray(logsRaw) ? logsRaw.slice(-35).reverse() : undefined;
+    res.json({ success: true, data: { queues, leases, firewall: Array.isArray(firewall) ? firewall : [], ...(logs ? { logs } : {}) } });
   } catch (e: any) { res.status(500).json({ success: false, message: e.message }); }
 });
 
@@ -874,7 +1065,7 @@ router.get("/api/mikrotik/data/sync/all", async (req: Request, res: Response) =>
         fetchSafeCached('/system/routerboard/print', undefined, 120000, client, hardForce).catch(() => []),
         fetchSafeCached('/interface/print', ['.proplist=.id,name,type,running,disabled,rx-byte,tx-byte,comment'], 25000, client, force).catch(() => []),
         fetchSafeCached('/system/health/print', undefined, 45000, client, hardForce).catch(() => []),
-        client.checkInternetConnectivity({ skipIcmpPing: true }).catch(() => ({ hasInternet: true, gateway: '', wanIp: '', pingMs: 15 }))
+        client.checkInternetConnectivity({ skipIcmpPing: true }).catch(() => ({ hasInternet: true, gateway: '', wanIp: '', pingMs: 0 }))
       ]);
       const resItem = Array.isArray(resourceRes) ? resourceRes[0] : null;
       let cpuTempRaw: any, boardTempRaw: any;
@@ -990,19 +1181,22 @@ router.get("/api/mikrotik/data/sync/all", async (req: Request, res: Response) =>
       })()
     ]);
 
-    // المرحلة 3: بيانات الشبكة الثقيلة (مخزنة مؤقتاً لتفادي إجهاد المعالج)
+    // المرحلة 3: بيانات الشبكة الثقيلة (بدون سحب السجل الكامل في الخلفية إلا عند الطلب)
+    const includeLogs = req.query.includeLogs === 'true';
     const networkRes = await (async () => {
       const [queuesRaw, leasesRaw, firewall, logsRaw] = await Promise.all([
         fetchSafeCached('/queue/simple/print', ['.proplist=.id,name,target,max-limit,limit-at,priority,bytes,rate,disabled'], 45000, client, hardForce).catch(() => []),
         fetchSafeCached('/ip/dhcp-server/lease/print', ['.proplist=.id,address,mac-address,server,host-name,status,expires-after,dynamic,disabled,comment'], 45000, client, hardForce).catch(() => []),
         fetchSafeCached('/ip/firewall/filter/print', ['.proplist=.id,chain,action,bytes,packets,disabled,comment'], 60000, client, hardForce).catch(() => []),
-        fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 45000, client, hardForce).catch(() => [])
+        includeLogs
+          ? fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 60000, client, hardForce).catch(() => [])
+          : Promise.resolve(null)
       ]);
       return {
         queues: (Array.isArray(queuesRaw) ? queuesRaw : []).map(normalizeSimpleQueue),
         leases: (Array.isArray(leasesRaw) ? leasesRaw.map(normalizeDhcpLease) : []).filter(Boolean),
         firewall: Array.isArray(firewall) ? firewall : [],
-        logs: (Array.isArray(logsRaw) ? logsRaw : []).slice(-30).reverse()
+        ...(Array.isArray(logsRaw) ? { logs: logsRaw.slice(-35).reverse() } : {})
       };
     })();
 
@@ -1090,13 +1284,21 @@ router.post("/api/mikrotik/ping-stabilizer/config", (req: Request, res: Response
   }
 });
 
+router.get("/api/mikrotik/ping-stabilizer/qos-preview", (req: Request, res: Response) => {
+  const prioritizeManagementApi = req.query.prioritizeManagementApi !== "false";
+  const interfaceList = typeof req.query.interfaceList === "string" ? req.query.interfaceList : "WAN";
+  const maxLimit = typeof req.query.maxLimit === "string" ? req.query.maxLimit : "10M";
+  const preview = previewRouterPingFastLaneRules({ prioritizeManagementApi, interfaceList, maxLimit });
+  return res.json({ success: true, ...preview });
+});
+
 router.post("/api/mikrotik/ping-stabilizer/optimize-now", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) {
-    return res.status(401).json({ success: false, message: "الراوتر غير متصل حالياً" });
+  if (!client || !client.isConnected()) {
+    return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
   try {
-    const { target = "1.1.1.1", count = 3, applyQos = false } = req.body || {};
+    const { target = "1.1.1.1", count = 3, applyQos = false, interfaceList = "WAN", maxLimit = "10M" } = req.body || {};
     const safeTarget = sanitizeInput(String(target || "1.1.1.1")) || "1.1.1.1";
     const probe = await runActivePingProbe(client, { target: safeTarget, count: Number(count) || 3 });
 
@@ -1110,7 +1312,11 @@ router.post("/api/mikrotik/ping-stabilizer/optimize-now", async (req: Request, r
 
     let qosResult: any = null;
     if (applyQos) {
-      qosResult = await applyRouterPingFastLane(client, { prioritizeManagementApi: true });
+      qosResult = await applyRouterPingFastLane(client, {
+        prioritizeManagementApi: true,
+        interfaceList: sanitizeInput(String(interfaceList || "WAN")),
+        maxLimit: sanitizeInput(String(maxLimit || "10M"))
+      });
     } else {
       await getRouterPingFastLaneStatus(client).catch(() => {});
     }
@@ -1134,13 +1340,17 @@ router.post("/api/mikrotik/ping-stabilizer/optimize-now", async (req: Request, r
 
 router.post("/api/mikrotik/ping-stabilizer/qos-fastlane", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) {
-    return res.status(401).json({ success: false, message: "الراوتر غير متصل حالياً" });
+  if (!client || !client.isConnected()) {
+    return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
   try {
-    const { enable, prioritizeManagementApi = true } = req.body || {};
+    const { enable, prioritizeManagementApi = true, interfaceList = "WAN", maxLimit = "10M" } = req.body || {};
     const result = enable
-      ? await applyRouterPingFastLane(client, { prioritizeManagementApi: Boolean(prioritizeManagementApi) })
+      ? await applyRouterPingFastLane(client, {
+          prioritizeManagementApi: Boolean(prioritizeManagementApi),
+          interfaceList: sanitizeInput(String(interfaceList || "WAN")),
+          maxLimit: sanitizeInput(String(maxLimit || "10M"))
+        })
       : await removeRouterPingFastLane(client);
 
     const stab = typeof client.getPingStabilizer === "function" ? client.getPingStabilizer() : null;
@@ -1185,7 +1395,7 @@ router.post("/api/mikrotik/system/eco-mode", (req: Request, res: Response) => {
 // ==========================================
 router.get("/api/mikrotik/hotspot/profiles", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
     if (force) invalidateCache('/ip/hotspot/user/profile');
@@ -1199,7 +1409,7 @@ router.get("/api/mikrotik/hotspot/profiles", async (req: Request, res: Response)
 
 router.get("/api/mikrotik/ppp/profiles", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
     if (force) invalidateCache('/ppp/profile');
@@ -1213,7 +1423,7 @@ router.get("/api/mikrotik/ppp/profiles", async (req: Request, res: Response) => 
 
 router.get("/api/mikrotik/userman/profiles", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
     const umData = await fetchComprehensiveUsermanData(client, force);
@@ -1229,7 +1439,7 @@ router.get("/api/mikrotik/userman/profiles", async (req: Request, res: Response)
 // ==========================================
 router.get("/api/mikrotik/prefetch/essential", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
 
   try {
     // 1. Fetch Hotspot Profiles (heavily cached 60 seconds)
@@ -1294,12 +1504,15 @@ router.get("/api/mikrotik/prefetch/essential", async (req: Request, res: Respons
 // ==========================================
 router.get("/api/mikrotik/non-critical/sync", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
+  const includeLogs = req.query.includeLogs === 'true';
 
   try {
     const [logsRaw, interfacesRaw] = await Promise.all([
-      fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 15000, client, force),
+      includeLogs
+        ? fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 60000, client, force)
+        : Promise.resolve(null),
       fetchSafeCached('/interface/print', ['=.proplist=.id,name,type,running,disabled,rx-byte,tx-byte,comment'], 10000, client, force)
     ]);
 
@@ -1331,8 +1544,7 @@ router.get("/api/mikrotik/non-critical/sync", async (req: Request, res: Response
       success: true,
       timestamp: Date.now(),
       data: {
-        logs: normalizedLogs,
-        rawLogs,
+        ...(includeLogs ? { logs: normalizedLogs, rawLogs } : {}),
         interfaces: normalizedInterfaces,
         interfaceNames,
         throttlerStats: typeof client.getThrottlerStats === 'function' ? client.getThrottlerStats() : null,
@@ -1350,11 +1562,11 @@ router.get("/api/mikrotik/non-critical/sync", async (req: Request, res: Response
 
 router.get("/api/mikrotik/system/logs", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
 
   try {
-    const logsRaw = await fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 12000, client, force);
+    const logsRaw = await fetchSafeCached('/log/print', ['=.proplist=.id,time,topics,message'], 60000, client, force);
     const logs = (Array.isArray(logsRaw) ? logsRaw : []).slice(-150).reverse().map((l: any, idx: number) => {
       const topics = String(l?.topics || "");
       const msg = String(l?.message || "");
@@ -1381,7 +1593,7 @@ router.get("/api/mikrotik/system/logs", async (req: Request, res: Response) => {
 
 router.get("/api/mikrotik/interfaces", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   const force = req.query.force === 'true' || req.headers['x-force-sync'] === 'true';
 
   try {
@@ -1401,7 +1613,7 @@ router.get("/api/mikrotik/interfaces", async (req: Request, res: Response) => {
 // ==========================================
 router.post("/api/mikrotik/batch", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
 
   const { queries } = req.body;
   if (!Array.isArray(queries) || queries.length === 0) {
@@ -1456,12 +1668,20 @@ router.post("/api/mikrotik/batch", async (req: Request, res: Response) => {
 // 1. Reboot Router
 router.post("/api/mikrotik/system/reboot", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
+  
+  if (!req.body?.confirmReboot) {
+    return res.status(400).json({ success: false, message: "يجب تأكيد عملية إعادة تشغيل الراوتر (تأكيد مزدوج مطلوب)" });
+  }
+
   try {
     recordAudit(req, "system_reboot", "router_system", "success");
-    // Send reboot command. RouterOS drops connection immediately on reboot.
-    client.querySafe('/system/reboot').catch(() => {});
-    return res.json({ success: true, message: "تم إرسال أمر إعادة تشغيل جهاز المايكروتك بنجاح" });
+    try {
+      await client.querySafe('/system/reboot');
+    } catch {
+      // Router drops connection immediately on reboot, expected
+    }
+    return res.json({ success: true, message: "تم تنفيذ أمر إعادة تشغيل جهاز المايكروتك بنجاح" });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: translateErrorMessage(e) });
   }
@@ -1470,7 +1690,7 @@ router.post("/api/mikrotik/system/reboot", async (req: Request, res: Response) =
 // 2. Real System Binary Backup (.backup)
 router.post("/api/mikrotik/system/backup", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const rawName = (req.body?.name || `zctrl_backup_${Date.now().toString(36)}`).trim();
     const cleanName = sanitizeInput(rawName).replace(/[^a-zA-Z0-9_-]/g, '') || `backup_${Date.now()}`;
@@ -1496,7 +1716,7 @@ router.post("/api/mikrotik/system/backup", async (req: Request, res: Response) =
 // 3. Real Configuration Script Export (.rsc)
 router.post("/api/mikrotik/system/export", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const exportFileName = `zctrl_exp_${Date.now().toString(36)}`;
     const isCompact = req.body?.compact !== false;
@@ -1506,7 +1726,9 @@ router.post("/api/mikrotik/system/export", async (req: Request, res: Response) =
 
     try {
       await client.query('/export', params);
-    } catch {}
+    } catch (err: any) {
+      appLogger.warn('Diagnostics', 'RouterOS /export warning', { file: exportFileName, error: err?.message });
+    }
 
     // Wait a brief moment for RouterOS filesystem to flush the file
     await new Promise((resolve) => setTimeout(resolve, 800));
@@ -1519,7 +1741,9 @@ router.post("/api/mikrotik/system/export", async (req: Request, res: Response) =
       if (Array.isArray(fileList) && fileList.length > 0) {
         fileContents = fileList[0]?.contents || '';
       }
-    } catch {}
+    } catch (err: any) {
+      appLogger.warn('Diagnostics', 'Read exported .rsc file failed', { file: fullFileName, error: err?.message });
+    }
 
     invalidateCache('/file');
 
@@ -1537,7 +1761,7 @@ router.post("/api/mikrotik/system/export", async (req: Request, res: Response) =
 // 4. Update System Identity (Name)
 router.post("/api/mikrotik/system/identity", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const rawName = (req.body?.name || '').trim();
     if (!rawName) return res.status(400).json({ success: false, message: "اسم الراوتر مطلوب" });
@@ -1560,7 +1784,7 @@ router.post("/api/mikrotik/system/identity", async (req: Request, res: Response)
 // 5. Flush DNS Cache
 router.post("/api/mikrotik/system/flush-dns", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     await client.querySafe('/ip/dns/cache/flush');
     return res.json({ success: true, message: "تم تفريغ وحذف كاش الـ DNS من الراوتر بنجاح" });
@@ -1571,7 +1795,7 @@ router.post("/api/mikrotik/system/flush-dns", async (req: Request, res: Response
 
 router.get("/api/mikrotik/queues", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const raw = await client.querySafe('/queue/simple/print');
     const queues = (Array.isArray(raw) ? raw : []).map(normalizeSimpleQueue);
@@ -1584,7 +1808,7 @@ router.get("/api/mikrotik/queues", async (req: Request, res: Response) => {
 // Comprehensive Real-time Multi-Profile Direct Refresh
 router.post("/api/mikrotik/data/refresh-profiles", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     invalidateCache("/ip/hotspot");
     invalidateCache("/ppp");
@@ -1622,10 +1846,10 @@ router.post("/api/mikrotik/data/refresh-profiles", async (req: Request, res: Res
 // API: Sync - Legacy Endpoint (Optimized with strict proplists & thermal protection to protect router CPU)
 router.get("/api/mikrotik/sync", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) {
-    const ok = await client.ensureConnected();
+  if (!client || !client.isConnected()) {
+    const ok = await client?.ensureConnected?.().catch(() => false);
     if (!ok) {
-      return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
   }
 
@@ -1635,25 +1859,25 @@ router.get("/api/mikrotik/sync", async (req: Request, res: Response) => {
     const [identityRes, boardRes, interfaces] = await Promise.all([
       fetchSafeCached('/system/identity/print', undefined, 60000, client),
       fetchSafeCached('/system/routerboard/print', undefined, 60000, client),
-      fetchSafeCached('/interface/print', undefined, 30000, client)
+      fetchSafeCached('/interface/print', ['=.proplist=.id,name,type,running,disabled,rx-byte,tx-byte,comment'], 30000, client)
     ]);
 
     // 2. Heavy Subsystems - Protected with strict property projections (.proplist)
     const isThermalThrottled = typeof client.isThermalStressed === 'function' && client.isThermalStressed();
 
     const [activeHotspotUsers, hotspotUsers, hotspotProfilesRaw, ipBindings] = await Promise.all([
-      fetchSafeCached('/ip/hotspot/active/print', undefined, isThermalThrottled ? 10000 : 5000, client),
+      fetchSafeCached('/ip/hotspot/active/print', ['=.proplist=.id,user,address,mac-address,uptime,bytes-in,bytes-out,login-by,comment'], isThermalThrottled ? 10000 : 5000, client),
       fetchSafeCached('/ip/hotspot/user/print', ['=.proplist=.id,name,password,profile,uptime,bytes-in,bytes-out,limit-uptime,limit-bytes-total,comment,disabled'], isThermalThrottled ? 30000 : 15000, client),
       fetchSafeCached('/ip/hotspot/user/profile/print', undefined, 30000, client),
       fetchSafeCached('/ip/hotspot/ip-binding/print', undefined, 20000, client)
     ]);
 
     const [pppActiveRaw, pppSecretsRaw, pppProfilesRaw, simpleQueuesRaw, dhcpLeasesRaw] = await Promise.all([
-      fetchSafeCached('/ppp/active/print', undefined, isThermalThrottled ? 10000 : 5000, client),
+      fetchSafeCached('/ppp/active/print', ['=.proplist=.id,name,service,caller-id,address,uptime,encoding'], isThermalThrottled ? 10000 : 5000, client),
       fetchSafeCached('/ppp/secret/print', ['=.proplist=.id,name,password,profile,service,caller-id,remote-address,comment,disabled'], isThermalThrottled ? 25000 : 15000, client),
       fetchSafeCached('/ppp/profile/print', undefined, 30000, client),
-      fetchSafeCached('/queue/simple/print', undefined, 20000, client),
-      fetchSafeCached('/ip/dhcp-server/lease/print', undefined, 20000, client)
+      fetchSafeCached('/queue/simple/print', ['=.proplist=.id,name,target,max-limit,limit-at,priority,bytes,rate,disabled'], 20000, client),
+      fetchSafeCached('/ip/dhcp-server/lease/print', ['=.proplist=.id,address,mac-address,server,host-name,status,expires-after,dynamic,disabled,comment'], 20000, client)
     ]);
     const dhcpLeases = (Array.isArray(dhcpLeasesRaw) ? dhcpLeasesRaw.map(normalizeDhcpLease) : []).filter(Boolean);
 
@@ -1791,7 +2015,7 @@ router.post("/api/mikrotik/command", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
     const ok = typeof client?.ensureConnected === "function" ? await client.ensureConnected() : false;
-    if (!ok) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+    if (!ok) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
   try {
     const { command } = req.body;
@@ -1952,9 +2176,9 @@ router.post("/api/mikrotik/command", async (req: Request, res: Response) => {
 // API: Live Router Security Resources (Services, Firewall, Address Lists, Schedulers, Queues/Mangle, VLANs)
 router.get("/api/mikrotik/security/resources", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) {
-    const ok = await client.ensureConnected();
-    if (!ok) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) {
+    const ok = await client?.ensureConnected?.().catch(() => false);
+    if (!ok) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
   try {
     const [servicesRaw, filterRaw, addressListRaw, schedulerRaw, mangleRaw, queuesRaw, vlanRaw] = await Promise.all([
@@ -2055,8 +2279,8 @@ router.get("/api/mikrotik/security/resources", async (req: Request, res: Respons
 // ==========================================
 router.get("/api/mikrotik/bandwidth/analytics", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) {
-    return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client || !client.isConnected()) {
+    return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
 
   try {
@@ -2278,10 +2502,10 @@ router.get("/api/mikrotik/status", (req: Request, res: Response) => {
 router.get("/api/mikrotik/syslog", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({ success: false, messages: [], message: "غير متصل بالراوتر" });
+    return res.status(503).json({ success: false, reconnecting: true, messages: [], message: "جاري إعادة الاتصال بالراوتر" });
   }
   try {
-    const rawLogs = await fetchSafeCached("/log/print", undefined, 10000, client);
+    const rawLogs = await fetchSafeCached("/log/print", undefined, 60000, client);
     const list = Array.isArray(rawLogs) ? rawLogs.slice(-200).reverse() : [];
     return res.json({ success: true, messages: list });
   } catch (e: any) {
@@ -2291,7 +2515,10 @@ router.get("/api/mikrotik/syslog", async (req: Request, res: Response) => {
 
 router.post("/api/auth/logout", async (req: Request, res: Response) => {
   try {
-    const token = resolveRequestToken(req);
+    const { token, source } = resolveRequestTokenWithSource(req);
+    if (source === "cookie" && !verifyCookieCsrf(req)) {
+      return res.status(403).json({ success: false, message: "فشل التحقق الأمني للطلب" });
+    }
     const session = token ? routerClients.get(token) : undefined;
     if (session) {
       try {
@@ -2300,15 +2527,22 @@ router.post("/api/auth/logout", async (req: Request, res: Response) => {
         } else if (session.client && typeof session.client.disconnect === "function") {
           session.client.disconnect();
         }
-      } catch {}
+      } catch (err: any) {
+        appLogger.warn('Diagnostics', 'Logout client cleanup failed', { error: err?.message });
+      }
       if (getLatestActiveClient() === session.client) {
         setLatestActiveClient(null);
       }
+      if (session.host) {
+        deleteRouterMutex(session.host);
+      }
       routerClients.delete(token);
     }
+    clearSessionCookie(req, res);
     recordAudit(req, "logout", "session", "success");
     return res.json({ success: true, message: "تم تسجيل الخروج بنجاح" });
   } catch (e: any) {
+    clearSessionCookie(req, res);
     return res.status(500).json({ success: false, message: translateErrorMessage(e) });
   }
 });
@@ -2316,7 +2550,7 @@ router.post("/api/auth/logout", async (req: Request, res: Response) => {
 router.post("/api/mikrotik/invoke", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({ success: false, error: "راوتر المايكروتك غير متصل" });
+    return res.status(503).json({ success: false, reconnecting: true, error: "جاري إعادة الاتصال بالراوتر" });
   }
   try {
     const rawCmd = sanitizeInput(req.body?.cmd || "");

@@ -167,7 +167,9 @@ export const QueuesBandwidthView: React.FC = () => {
 
   const openAddModal = () => {
     setEditingQueue(null);
-    setFormName(`queue_${Math.floor(100 + Math.random() * 900)}`);
+    const randSuffix = new Uint32Array(1);
+    crypto.getRandomValues(randSuffix);
+    setFormName(`queue_${100 + (randSuffix[0] % 900)}`);
     setFormTarget('192.168.88.50/32');
     setFormMaxLimit('2M/10M');
     setFormLimitAt('512k/2M');

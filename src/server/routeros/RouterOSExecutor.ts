@@ -1,4 +1,5 @@
 import { MikrotikAPI, type MikrotikClient } from '../mikrotik-api';
+import { appLogger } from '../services/logger';
 import {
   executeProfileMutation,
   getUsermanEndpoints,
@@ -312,7 +313,9 @@ export class RouterOSExecutor {
                 'from-time',
                 'till-time',
               ]);
-            } catch {}
+            } catch (err) {
+              appLogger.warn('RouterOSExecutor', 'Failed updating userman profile-limitation link', { oldName, linkId, err: String(err) });
+            }
           }
           break;
         }
@@ -331,7 +334,9 @@ export class RouterOSExecutor {
           'from-time',
           'till-time',
         ]);
-      } catch {}
+      } catch (err) {
+        appLogger.warn('RouterOSExecutor', 'Failed adding userman profile-limitation link', { newProfName, limName, err: String(err) });
+      }
     }
   }
 
@@ -360,7 +365,9 @@ export class RouterOSExecutor {
         if (link['.id']) {
           try {
             await this.client.query(`${um.profileLimitation}/remove`, [`=.id=${link['.id']}`]);
-          } catch {}
+          } catch (err) {
+            appLogger.warn('RouterOSExecutor', 'Failed removing userman profile-limitation link', { name: actualName, linkId: link['.id'], err: String(err) });
+          }
         }
       }
     }
@@ -379,7 +386,9 @@ export class RouterOSExecutor {
           await this.client.query(`${um.limitation}/remove`, [`=.id=${foundLim[0]['.id']}`]);
         }
       }
-    } catch {}
+    } catch (err) {
+      appLogger.warn('RouterOSExecutor', 'Failed cleaning orphaned userman limitation', { name: actualName, err: String(err) });
+    }
   }
 
   async listUsermanProfiles(): Promise<Record<string, any>[]> {

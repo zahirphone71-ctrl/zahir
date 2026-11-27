@@ -10,7 +10,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import cors from "cors";
+import helmet from "helmet";
 import dotenv from "dotenv";
+import { appLogger } from "./src/server/rotatingLogger.ts";
 import {
   MikrotikAPI as MikrotikAPI_Original,
   MikroTikRequestThrottler
@@ -30,7 +32,9 @@ import {
   apiGeneralRateLimiter,
   corsOptions,
   securityConfig,
-  resolveRequestToken
+  resolveRequestToken,
+  resolveRequestTokenWithSource,
+  verifyCookieCsrf
 } from "./src/server/security-shield.ts";
 import { createRbacMiddleware } from "./src/server/rbac.ts";
 import { RevertJournalSweeper } from "./src/server/domain/RevertJournalSweeper.ts";
@@ -49,12 +53,20 @@ import {
 dotenv.config();
 RevertJournalSweeper.startSweeper();
 
-// Global Exception & Rejection Handlers to prevent process crashes
+// Global Exception & Rejection Handlers: log cleanly and exit fatally on corrupted uncaught state
 process.on("uncaughtException", (error) => {
+  appLogger.error("server", "Fatal uncaughtException — terminating process", {
+    message: error?.message || String(error),
+    stack: error?.stack
+  });
   console.error("[Server Process Uncaught Exception]", error);
+  setTimeout(() => process.exit(1), 100);
 });
 
 process.on("unhandledRejection", (reason) => {
+  appLogger.error("server", "Unhandled Promise Rejection", {
+    reason: reason instanceof Error ? reason.message : String(reason)
+  });
   console.error("[Server Process Unhandled Rejection]", reason);
 });
 
@@ -75,16 +87,112 @@ export { realtimeSyncServer };
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || "127.0.0.1";
+const IS_PROD = process.env.NODE_ENV === "production";
 
-// Enable trust proxy for Cloud Run / Reverse Proxy environments
-app.set("trust proxy", 1);
+// Conditional trust proxy: only trust X-Forwarded-For when explicitly behind a reverse proxy
+if (process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true") {
+  app.set("trust proxy", 1);
+}
 
-// Security Headers Middleware (allowing AI Studio preview iframe embedding)
-app.use((_req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-XSS-Protection", "1; mode=block");
-  next();
+// Host Header Validation Guard against DNS Rebinding attacks
+function isAllowedHostHeader(rawHostHeader: string | undefined): boolean {
+  if (!rawHostHeader) return false;
+  const hostHeader = rawHostHeader.trim().toLowerCase();
+  const hostname = hostHeader.startsWith("[")
+    ? hostHeader.slice(0, hostHeader.indexOf("]") + 1)
+    : hostHeader.split(":")[0];
+
+  const envAllowedHosts = (process.env.ALLOWED_HOSTS || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (envAllowedHosts.includes(hostHeader) || envAllowedHosts.includes(hostname)) {
+    return true;
+  }
+
+  if (process.env.APP_URL && process.env.APP_URL.trim()) {
+    try {
+      const appUrl = new URL(process.env.APP_URL.trim());
+      if (hostHeader === appUrl.host.toLowerCase() || hostname === appUrl.hostname.toLowerCase()) {
+        return true;
+      }
+    } catch (err) {
+      appLogger.warn("security", "Invalid APP_URL while validating Host header", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  if (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]" || hostname === "::1") {
+    return true;
+  }
+
+  if (HOST && HOST !== "0.0.0.0" && (hostname === HOST.toLowerCase() || hostHeader === `${HOST.toLowerCase()}:${PORT}`)) {
+    return true;
+  }
+
+  if (!IS_PROD) {
+    if (
+      hostname.endsWith(".run.app") ||
+      hostname.endsWith(".aistudio.google") ||
+      hostname.endsWith(".googleusercontent.com")
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+app.use((req, res, next) => {
+  if (!isAllowedHostHeader(req.headers.host)) {
+    appLogger.warn("security", "Rejected request with disallowed Host header", { host: req.headers.host });
+    return res.status(421).json({
+      success: false,
+      message: "عنوان المضيف (Host) غير مصرح به"
+    });
+  }
+  return next();
 });
+
+// Security Headers via Helmet + CSP enabled in both Production and Development
+if (IS_PROD) {
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'"],
+          styleSrcElem: ["'self'"],
+          styleSrcAttr: ["'unsafe-inline'"],
+          fontSrc: ["'self'", "data:"],
+          imgSrc: ["'self'", "data:", "blob:"],
+          connectSrc: ["'self'", "ws:", "wss:"],
+          frameAncestors: ["'none'"]
+        }
+      }
+    })
+  );
+} else {
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          fontSrc: ["'self'", "data:"],
+          imgSrc: ["'self'", "data:", "blob:"],
+          connectSrc: ["'self'", "ws:", "wss:"],
+          frameAncestors: ["'none'"]
+        }
+      }
+    })
+  );
+}
 
 // Dynamic & Controlled CORS Whitelist + JSON Body Parser
 app.use(cors(corsOptions));
@@ -115,12 +223,24 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
   const PUBLIC_API_ROUTES = [
     "/api/health",
     "/api/ping",
+    "/api/auth/bootstrap-status",
+    "/api/auth/bootstrap-admin",
     "/api/mikrotik/connect",
     "/api/mikrotik/cancel-connect",
     "/api/mikrotik/discover",
     "/api/mikrotik/diagnose",
     "/api/mikrotik/session"
   ];
+
+  const { token, source: tokenSource } = resolveRequestTokenWithSource(req);
+  const isUnsafeMethod = ["POST", "PUT", "DELETE", "PATCH"].includes(req.method.toUpperCase());
+
+  if (isUnsafeMethod && tokenSource === "cookie" && !verifyCookieCsrf(req)) {
+    return res.status(403).json({
+      success: false,
+      message: "فشل التحقق الأمني للطلب (CSRF Check)"
+    });
+  }
 
   const isPublicRoute = PUBLIC_API_ROUTES.some(
     (route) => pathUrl === route || pathUrl.startsWith(route + "/")
@@ -129,7 +249,6 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     return next();
   }
 
-  const token = resolveRequestToken(req);
   const session = token ? routerClients.get(token) : undefined;
   let client = session?.client;
 
@@ -151,6 +270,8 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     if (!token || !session || !client) {
       return res.status(401).json({
         success: false,
+        code: "SESSION_INVALID",
+        sessionExpired: true,
         message: "انتهت صلاحية الجلسة أو رمز التحقق غير صالح، يرجى إعادة تسجيل الدخول"
       });
     }
@@ -158,7 +279,12 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     if (!client.isConnected() && typeof client.ensureConnected === "function") {
       try {
         await client.ensureConnected();
-      } catch {}
+      } catch (connErr) {
+        appLogger.warn("server", "Session ensureConnected attempt failed", {
+          path: pathUrl,
+          error: connErr instanceof Error ? connErr.message : String(connErr)
+        });
+      }
     }
 
     if (isHardwareRoute && !client.isConnected()) {
@@ -178,7 +304,12 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     if (client && typeof client.ensureConnected === "function") {
       try {
         await client.ensureConnected();
-      } catch {}
+      } catch (connErr) {
+        appLogger.warn("server", "Fallback ensureConnected attempt failed", {
+          path: pathUrl,
+          error: connErr instanceof Error ? connErr.message : String(connErr)
+        });
+      }
     }
     if (!client || !client.isConnected()) {
       const latestActive = getLatestActiveClient();
@@ -406,12 +537,12 @@ if (process.env.NODE_ENV !== "production") {
     })
     .then((vite) => {
       app.use(vite.middlewares);
-      const server = app.listen(PORT, "0.0.0.0", () => {
-        console.log(`Real MikroTik Server running on http://localhost:${PORT}`);
+      const server = app.listen(PORT, HOST, () => {
+        console.log(`Real MikroTik Server running on http://${HOST}:${PORT}`);
       });
       realtimeSyncServer.attach(server);
       server.on("error", (err: any) => {
-        console.error(`[Server Dev Error] Failed to listen on port ${PORT}:`, err);
+        console.error(`[Server Dev Error] Failed to listen on ${HOST}:${PORT}:`, err);
       });
     })
     .catch((err) => {
@@ -460,12 +591,12 @@ if (process.env.NODE_ENV !== "production") {
       res.status(503).send("ZCtrl is initializing. Please wait a moment and reload.");
     }
   });
-  const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Real MikroTik Server running on http://localhost:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Real MikroTik Server running on http://${HOST}:${PORT}`);
   });
   realtimeSyncServer.attach(server);
   server.on("error", (err: any) => {
-    console.error(`[Server Process Error] Failed to listen on port ${PORT}:`, err);
+    console.error(`[Server Process Error] Failed to listen on ${HOST}:${PORT}:`, err);
   });
 }
 
@@ -474,13 +605,26 @@ const handleGracefulShutdown = async () => {
   RevertJournalSweeper.stopSweeper();
   try {
     voucherDb.close();
-  } catch {}
+  } catch (err) {
+    appLogger.warn("server", "Voucher DB shutdown warning", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
   try {
     await ftpService.closeAll();
-  } catch {}
+  } catch (err) {
+    appLogger.warn("server", "FTP pool shutdown warning", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
   try {
     await destroyRuntimeResources();
-  } catch {}
+  } catch (err) {
+    appLogger.warn("server", "Runtime resources shutdown warning", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  appLogger.shutdown();
   process.exit(0);
 };
 

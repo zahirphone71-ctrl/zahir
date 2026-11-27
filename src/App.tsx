@@ -1,16 +1,17 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { MikroTikProvider, useMikroTik } from './context/MikroTikContext';
+import { MikroTikProvider, useConnectionSession, useMikroTikActions } from './context/MikroTikContext';
 import { DesktopHeader } from './components/DesktopHeader';
 import { Sidebar, TabType } from './components/Sidebar';
 import { MikrotikLoginView } from './components/MikrotikLoginView';
 import { HotspotUser } from './types/mikrotik';
 
-// Lazy-load all views and heavy modals on demand to keep startup bundle fast & lightweight
-const DashboardView = lazy(() => import('./components/DashboardView').then((m) => ({ default: m.DashboardView })));
-const SubscribersManagerView = lazy(() => import('./components/SubscribersManagerView').then((m) => ({ default: m.SubscribersManagerView })));
-const ProfilesManagerView = lazy(() => import('./components/ProfilesManagerView').then((m) => ({ default: m.ProfilesManagerView })));
-const CardPrintStudioView = lazy(() => import('./components/CardPrintStudioView').then((m) => ({ default: m.CardPrintStudioView })));
-const ActiveSessionsView = lazy(() => import('./components/ActiveSessionsView').then((m) => ({ default: m.ActiveSessionsView })));
+import { DashboardView } from './components/DashboardView';
+import { SubscribersManagerView } from './components/SubscribersManagerView';
+import { ProfilesManagerView } from './components/ProfilesManagerView';
+import { CardPrintStudioView } from './components/CardPrintStudioView';
+import { ActiveSessionsView } from './components/ActiveSessionsView';
+
+// Lazy-load secondary views and heavy modals on demand
 const QueuesBandwidthView = lazy(() => import('./components/QueuesBandwidthView').then((m) => ({ default: m.QueuesBandwidthView })));
 const InterfacesTrafficView = lazy(() => import('./components/InterfacesTrafficView').then((m) => ({ default: m.InterfacesTrafficView })));
 const RouterTerminalView = lazy(() => import('./components/RouterTerminalView').then((m) => ({ default: m.RouterTerminalView })));
@@ -40,6 +41,14 @@ const ViewChunkFallback: React.FC = () => (
 import { applyAppTheme, getSavedAppTheme } from './utils/themeManager';
 import { safeStorage, safeSession } from './utils/safeStorage';
 import { ErrorBoundary } from './components/ErrorBoundary';
+
+if (typeof window !== 'undefined') {
+  try {
+    applyAppTheme(getSavedAppTheme());
+  } catch (err) {
+    console.warn('Failed to apply initial theme:', err);
+  }
+}
 import {
   LayoutDashboard,
   Users,
@@ -54,14 +63,14 @@ import {
 } from 'lucide-react';
 
 function MainAppContent() {
-  const { isConnected, showToast, toast, disconnectRouter, setCurrentActiveTab } = useMikroTik();
+  const { isConnected, isRestoringSession, toast } = useConnectionSession();
+  const { showToast, setCurrentActiveTab } = useMikroTikActions();
   
   // Strictly require authentication per session. On fresh launch, always prompt login without auto-login.
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     const isSessionAuth = safeSession.getItem('zctrl_session_authenticated') === 'true';
-    const hasToken = safeStorage.getItem('zcontrol_active_token');
     const hasExplicitLogout = safeStorage.getItem('zctrl_explicit_logout') === 'true';
-    if (!isSessionAuth || !hasToken || hasExplicitLogout) {
+    if (!isSessionAuth || hasExplicitLogout) {
       return 'mikrotik_login';
     }
     const saved = (safeSession.getItem('zctrl_active_tab') || safeStorage.getItem('zctrl_active_tab')) as TabType;
@@ -75,6 +84,50 @@ function MainAppContent() {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
   const [isPdfExportOpen, setIsPdfExportOpen] = useState<boolean>(false);
   const [usersToPrint, setUsersToPrint] = useState<HotspotUser[]>([]);
+  const [backendFailure, setBackendFailure] = useState<{
+    attempts: number;
+    code?: number | null;
+    signal?: string | null;
+    message?: string;
+  } | null>(null);
+  const [isRetryingBackend, setIsRetryingBackend] = useState<boolean>(false);
+
+  // Listen to Electron backend respawn exhaustion or recovery
+  useEffect(() => {
+    const bridge = typeof window !== 'undefined' ? window.zctrlDesktopSession : undefined;
+    if (!bridge) return;
+    const unsubFail = bridge.onBackendFailed?.((payload) => {
+      setBackendFailure(payload);
+      setIsRetryingBackend(false);
+    });
+    const unsubRespawn = bridge.onBackendRespawned?.(() => {
+      setBackendFailure(null);
+      setIsRetryingBackend(false);
+    });
+    return () => {
+      unsubFail?.();
+      unsubRespawn?.();
+    };
+  }, []);
+
+  const handleRetryBackend = async () => {
+    const bridge = typeof window !== 'undefined' ? window.zctrlDesktopSession : undefined;
+    if (!bridge?.retryBackend) return;
+    setIsRetryingBackend(true);
+    try {
+      const res = await bridge.retryBackend();
+      if (res?.success) {
+        setBackendFailure(null);
+      } else if (res?.message) {
+        showToast(res.message, 'error');
+      }
+    } catch (err) {
+      console.warn('Backend retry failed:', err);
+      showToast('تعذر إعادة تشغيل الخادم الخلفي', 'error');
+    } finally {
+      setIsRetryingBackend(false);
+    }
+  };
 
   // Synchronize current tab with MikroTikContext for smart resource-saving polling
   useEffect(() => {
@@ -83,42 +136,10 @@ function MainAppContent() {
     }
   }, [activeTab, setCurrentActiveTab]);
 
-  const disconnectRouterRef = React.useRef(disconnectRouter);
-  disconnectRouterRef.current = disconnectRouter;
-  const showToastRef = React.useRef(showToast);
-  showToastRef.current = showToast;
-
-  // Inactivity Auto-Logout Hook (Strictly opt-in via Security Settings; 0% CPU overhead)
+  // Purge any legacy auto-logout setting so sessions never terminate unexpectedly while open
   useEffect(() => {
-    if (!isConnected) return;
-    const isAutoLogoutEnabled = safeStorage.getItem('set_sec_auto_logout') === 'true';
-    if (!isAutoLogoutEnabled) return;
-
-    const INACTIVITY_LIMIT_MS = 15 * 60 * 1000; // 15 minutes
-    let lastActivityTime = Date.now();
-
-    const onUserActivity = () => {
-      const now = Date.now();
-      if (now - lastActivityTime > 15000) {
-        lastActivityTime = now;
-      }
-    };
-
-    const intervalId = setInterval(() => {
-      if (Date.now() - lastActivityTime >= INACTIVITY_LIMIT_MS) {
-        showToastRef.current?.('تم تسجيل الخروج تلقائياً لعدم وجود أي نشاط لمدة 15 دقيقة وفقاً لسياسة الأمان', 'info');
-        disconnectRouterRef.current?.();
-      }
-    }, 30000);
-
-    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
-    events.forEach((evt) => window.addEventListener(evt, onUserActivity, { passive: true }));
-
-    return () => {
-      clearInterval(intervalId);
-      events.forEach((evt) => window.removeEventListener(evt, onUserActivity));
-    };
-  }, [isConnected]);
+    safeStorage.removeItem('set_sec_auto_logout');
+  }, []);
 
   // Initialize global application theme template on mount
   useEffect(() => {
@@ -140,15 +161,16 @@ function MainAppContent() {
         const savedTab = ((safeSession.getItem('zctrl_active_tab') || safeStorage.getItem('zctrl_active_tab')) as TabType) || 'dashboard';
         setActiveTab(savedTab === 'mikrotik_login' ? 'dashboard' : savedTab);
       }
-    } else {
+    } else if (!isRestoringSession) {
       const hasExplicitLogout = safeStorage.getItem('zctrl_explicit_logout') === 'true';
+      const isSessionAuth = safeSession.getItem('zctrl_session_authenticated') === 'true';
       // Resilience Rule: Never kick user to login screen on transient router delays or background reconnections.
-      // Only navigate to login screen if the user explicitly clicked logout.
-      if (hasExplicitLogout && activeTab !== 'mikrotik_login') {
+      // Only navigate to login screen if the user explicitly clicked logout or session is no longer authenticated.
+      if ((hasExplicitLogout || !isSessionAuth) && activeTab !== 'mikrotik_login') {
         setActiveTab('mikrotik_login');
       }
     }
-  }, [isConnected]);
+  }, [isConnected, isRestoringSession, activeTab]);
 
   // Global Ctrl+K / Cmd+K listener
   useEffect(() => {
@@ -164,11 +186,10 @@ function MainAppContent() {
 
   const handleSelectTab = (newTab: TabType, force: boolean = false) => {
     const isSessionAuth = safeSession.getItem('zctrl_session_authenticated') === 'true';
-    const hasToken = Boolean(safeStorage.getItem('zcontrol_active_token'));
     const hasExplicitLogout = safeStorage.getItem('zctrl_explicit_logout') === 'true';
 
     // Only force login if the user has no authenticated session or explicitly logged out
-    if (!force && (!isSessionAuth || !hasToken || hasExplicitLogout) && newTab !== 'mikrotik_login') {
+    if (!force && !isRestoringSession && (!isSessionAuth || hasExplicitLogout) && newTab !== 'mikrotik_login') {
       showToast('سجل الدخول بـ ZCtrl أولاً للوصول لباقي التبويبات', 'info');
       setActiveTab('mikrotik_login');
       setIsMobileMenuOpen(false);
@@ -214,6 +235,27 @@ function MainAppContent() {
   if (!isSessionAuth || hasExplicitLogout || activeTab === 'mikrotik_login') {
     return (
       <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans antialiased flex flex-col justify-center items-center selection:bg-blue-600 selection:text-white relative" dir="rtl">
+        {backendFailure && (
+          <div
+            role="alert"
+            className="w-full bg-rose-950/95 border-b border-rose-500/40 text-rose-100 px-4 py-3 flex flex-wrap items-center justify-between gap-3 z-50 fixed top-0 inset-x-0 shadow-lg"
+          >
+            <div className="flex items-center gap-2.5 text-xs sm:text-sm">
+              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+              <span className="font-bold">
+                {backendFailure.message || `توقف الخادم الخلفي بعد ${backendFailure.attempts} محاولات إعادة تشغيل.`}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={isRetryingBackend}
+              onClick={handleRetryBackend}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 cursor-pointer"
+            >
+              {isRetryingBackend ? 'جاري إعادة التشغيل...' : 'إعادة تشغيل الخادم'}
+            </button>
+          </div>
+        )}
         <ErrorBoundary fallbackTitle="حدث خطأ في تحميل واجهة تسجيل الدخول">
           <MikrotikLoginView onSuccessNavigate={() => {
             safeSession.setItem('zctrl_session_authenticated', 'true');
@@ -230,7 +272,7 @@ function MainAppContent() {
 
         {/* Global Toast on Login Portal */}
         {toast && (
-          <div className="fixed bottom-5 left-5 z-50 animate-in slide-in-from-bottom-3 duration-200">
+          <div className="fixed bottom-5 end-5 z-50 animate-in slide-in-from-bottom-3 duration-200">
             <div
               className={`px-4 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 text-sm backdrop-blur-md ${
                 toast.type === 'success'
@@ -268,6 +310,28 @@ function MainAppContent() {
         isSidebarCollapsed={isSidebarCollapsed}
         onToggleSidebarCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
+
+      {backendFailure && (
+        <div
+          role="alert"
+          className="w-full bg-rose-950/95 border-b border-rose-500/40 text-rose-100 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 z-40 shrink-0"
+        >
+          <div className="flex items-center gap-2.5 text-xs sm:text-sm">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span className="font-bold">
+              {backendFailure.message || `توقف الخادم الخلفي بعد ${backendFailure.attempts} محاولات إعادة تشغيل.`}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={isRetryingBackend}
+            onClick={handleRetryBackend}
+            className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 cursor-pointer"
+          >
+            {isRetryingBackend ? 'جاري إعادة التشغيل...' : 'إعادة تشغيل الخادم'}
+          </button>
+        </div>
+      )}
 
       {/* Main Work Area */}
       <div className="flex flex-1 w-full max-w-full overflow-hidden relative min-h-0">
@@ -315,7 +379,7 @@ function MainAppContent() {
         <button
           type="button"
           onClick={() => handleSelectTab('dashboard')}
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[10px] font-medium transition-colors ${
+          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
             activeTab === 'dashboard' ? 'text-blue-400 font-bold' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -326,7 +390,7 @@ function MainAppContent() {
         <button
           type="button"
           onClick={() => handleSelectTab('hotspot_users')}
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[10px] font-medium transition-colors ${
+          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
             activeTab === 'hotspot_users' ? 'text-blue-400 font-bold' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -337,7 +401,7 @@ function MainAppContent() {
         <button
           type="button"
           onClick={() => handleSelectTab('card_studio')}
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[10px] font-medium transition-colors ${
+          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
             activeTab === 'card_studio' || activeTab === 'generator' ? 'text-amber-400 font-bold' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -348,7 +412,7 @@ function MainAppContent() {
         <button
           type="button"
           onClick={() => handleSelectTab('active_sessions')}
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[10px] font-medium transition-colors ${
+          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
             activeTab === 'active_sessions' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -359,7 +423,7 @@ function MainAppContent() {
         <button
           type="button"
           onClick={() => setIsMobileMenuOpen(true)}
-          className="flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[10px] font-medium text-slate-400 hover:text-slate-200"
+          className="flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           <Menu className="w-5 h-5" />
           <span>كل الأقسام</span>
@@ -393,7 +457,7 @@ function MainAppContent() {
 
       {/* Global Toast Notification with Rapid Intervention Actions */}
       {toast && (
-        <div className="fixed bottom-5 left-5 z-50 animate-in slide-in-from-bottom-3 duration-200 max-w-xl w-full sm:w-auto px-3 sm:px-0">
+        <div className="fixed bottom-5 end-5 z-50 animate-in slide-in-from-bottom-3 duration-200 max-w-xl w-full sm:w-auto px-3 sm:px-0">
           <div
             className={`px-4 py-3 rounded-2xl border shadow-2xl flex items-center justify-between gap-3 text-sm backdrop-blur-md ${
               toast.type === 'success'
@@ -407,8 +471,8 @@ function MainAppContent() {
           >
             <div className="flex items-center gap-2.5">
               {toast.type === 'success' && <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />}
-              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 animate-pulse" />}
-              {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 animate-pulse" />}
+              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />}
+              {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />}
               {toast.type === 'info' && <Info className="w-5 h-5 text-blue-400 shrink-0" />}
               <span className="font-semibold text-xs sm:text-sm leading-snug">{toast.message}</span>
             </div>
@@ -419,7 +483,7 @@ function MainAppContent() {
                 onClick={() => {
                   toast.action?.onClick();
                 }}
-                className="shrink-0 bg-white/20 hover:bg-white/30 active:scale-95 text-white font-bold text-xs px-3 py-1.5 rounded-xl border border-white/30 transition-all cursor-pointer shadow-xs whitespace-nowrap"
+                className="shrink-0 bg-white/20 hover:bg-white/30 active:scale-95 text-white font-bold text-xs px-3 py-1.5 rounded-xl border border-white/30 transition-all cursor-pointer shadow-xs whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
               >
                 {toast.action.label}
               </button>

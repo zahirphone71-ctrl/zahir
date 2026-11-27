@@ -654,7 +654,7 @@ const HybridPortalEditor: React.FC<HybridPortalEditorProps> = ({
             <iframe
               srcDoc={activeFile && activeFile.fileType === 'html' ? substituteMikrotikVars(activeFile.content) : ''}
               className="w-full h-full"
-              sandbox="allow-scripts allow-forms allow-same-origin"
+              sandbox="allow-scripts allow-forms"
             />
           </div>
         </div>

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { OperationState, OperationResult, ChangePlan } from '../../types/governance';
 
 export interface OperationStepLog {
@@ -88,7 +89,7 @@ export class OperationStateTracker {
       if (active) return active;
     }
 
-    const operationId = `op_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const operationId = `op_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
     const tracked: TrackedOperation = {
       operationId,
       changeId: plan.changeId,

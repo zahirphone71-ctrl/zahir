@@ -45,12 +45,20 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
   } = useMikroTik();
 
   const [name, setName] = useState('سيرفر ZCtrl');
-  const [host, setHost] = useState('192.168.88.1');
+  const [host, setHost] = useState('');
   const [customPort, setCustomPort] = useState<string>('');
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [useSsl, setUseSsl] = useState(false);
+  const [strictTls, setStrictTls] = useState(true);
+  const [tlsFingerprint, setTlsFingerprint] = useState('');
+  const [tlsPrompt, setTlsPrompt] = useState<{
+    message: string;
+    pendingFingerprint: string;
+    attemptConfig: any;
+    saveOnSuccess?: boolean;
+  } | null>(null);
 
   // Zero-Trust Security: Passwords are NEVER cached or stored in localStorage (Rules 8 & 32)
   useEffect(() => {
@@ -176,13 +184,11 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
           setCustomPort(primary.port.toString());
         }
         setName(primary.name || 'سيرفر ZCtrl');
-      } else {
-        setHost('192.168.88.1');
       }
     } catch (err: any) {
       if (err?.name === 'AbortError' || !isMountedRef.current) return;
+      console.warn('Router discovery failed:', err);
       setIsDiscovering(false);
-      setHost('192.168.88.1');
     }
   };
 
@@ -194,19 +200,30 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
     const currentPass = password ? password.trim() : '';
     // Clear password immediately
     setPassword('');
+    setTlsPrompt(null);
 
-    const result = await connectToRouter({
+    const attemptConfig = {
       name: name.trim() || 'سيرفر ZCtrl',
       host: host.trim(),
       port: portNum,
       username: username.trim(),
       password: currentPass,
-      useSsl
-    });
+      useSsl,
+      strictTls,
+      ...(tlsFingerprint.trim() ? { tlsFingerprint: tlsFingerprint.trim() } : {})
+    };
+
+    const result = await connectToRouter(attemptConfig);
     if (!isMountedRef.current) return;
 
     if (result.success) {
       onClose();
+    } else if (result.reasonType === 'tls_untrusted_tofu' && result.pendingFingerprint) {
+      setTlsPrompt({
+        message: result.message || 'شهادة TLS غير مثبتة مسبقاً. يرجى التحقق من البصمة قبل الاعتماد.',
+        pendingFingerprint: result.pendingFingerprint,
+        attemptConfig
+      });
     }
   };
 
@@ -215,20 +232,32 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
     const portNum = customPort && Number(customPort) > 0 ? Number(customPort) : undefined;
     const currentPass = password ? password.trim() : '';
     setPassword('');
+    setTlsPrompt(null);
 
-    const result = await connectToRouter({
+    const attemptConfig = {
       name: name.trim() || 'سيرفر ZCtrl',
       host: host.trim(),
       port: portNum,
       username: username.trim(),
       password: currentPass,
-      useSsl
-    });
+      useSsl,
+      strictTls,
+      ...(tlsFingerprint.trim() ? { tlsFingerprint: tlsFingerprint.trim() } : {})
+    };
+
+    const result = await connectToRouter(attemptConfig);
     if (!isMountedRef.current) return;
 
     if (result.success && result.router) {
       saveRouter({ ...result.router, isSaved: true });
       onClose();
+    } else if (result.reasonType === 'tls_untrusted_tofu' && result.pendingFingerprint) {
+      setTlsPrompt({
+        message: result.message || 'شهادة TLS غير مثبتة مسبقاً. يرجى التحقق من البصمة قبل الاعتماد.',
+        pendingFingerprint: result.pendingFingerprint,
+        attemptConfig,
+        saveOnSuccess: true
+      });
     }
   };
 
@@ -236,6 +265,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
     setSelectedSavedId(r.id);
     setActiveSavedTarget(r);
     setSavedPasswordInput('');
+    setTlsPrompt(null);
   };
 
   const handleExecuteSavedConnect = async (e: React.FormEvent) => {
@@ -244,16 +274,55 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
 
     const passToUse = savedPasswordInput ? savedPasswordInput.trim() : '';
     setSavedPasswordInput('');
+    setTlsPrompt(null);
 
-    const result = await connectToRouter({
+    const attemptConfig = {
       ...activeSavedTarget,
       password: passToUse
-    });
+    };
+
+    const result = await connectToRouter(attemptConfig);
     if (!isMountedRef.current) return;
 
-    setActiveSavedTarget(null);
     if (result.success) {
+      setActiveSavedTarget(null);
       onClose();
+    } else if (result.reasonType === 'tls_untrusted_tofu' && result.pendingFingerprint) {
+      setActiveSavedTarget(null);
+      setTlsPrompt({
+        message: result.message || 'شهادة TLS غير مثبتة مسبقاً. يرجى التحقق من البصمة قبل الاعتماد.',
+        pendingFingerprint: result.pendingFingerprint,
+        attemptConfig
+      });
+    } else {
+      setActiveSavedTarget(null);
+    }
+  };
+
+  const handleConfirmTofu = async () => {
+    if (!tlsPrompt) return;
+    const { pendingFingerprint, attemptConfig, saveOnSuccess } = tlsPrompt;
+    setTlsFingerprint(pendingFingerprint);
+    setTlsPrompt(null);
+    const result = await connectToRouter({
+      ...attemptConfig,
+      tlsFingerprint: pendingFingerprint,
+      acceptTlsFingerprint: true,
+      strictTls: true
+    });
+    if (!isMountedRef.current) return;
+    if (result.success) {
+      if (saveOnSuccess && result.router) {
+        saveRouter({ ...result.router, isSaved: true });
+      }
+      onClose();
+    } else if (result.reasonType === 'tls_untrusted_tofu' && result.pendingFingerprint) {
+      setTlsPrompt({
+        message: result.message || 'يرجى التحقق من البصمة الجديدة.',
+        pendingFingerprint: result.pendingFingerprint,
+        attemptConfig,
+        saveOnSuccess
+      });
     }
   };
 
@@ -277,7 +346,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
             <div>
               <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
                 بوابة الاتصال الموحدة لـ ZCtrl
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-normal">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-normal">
                   WinBox • REST • API
                 </span>
               </h2>
@@ -285,8 +354,10 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+            aria-label="إغلاق نافذة الاتصال"
+            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
             <X className="w-5 h-5" />
           </button>
@@ -297,7 +368,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
           <button
             type="button"
             onClick={() => setActiveTab('profiles')}
-            className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 cursor-pointer ${
+            className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               activeTab === 'profiles'
                 ? 'bg-slate-900 border-t border-x border-slate-800 text-amber-400'
                 : 'text-slate-400 hover:text-slate-200'
@@ -309,7 +380,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
           <button
             type="button"
             onClick={() => setActiveTab('new')}
-            className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 cursor-pointer ${
+            className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               activeTab === 'new'
                 ? 'bg-slate-900 border-t border-x border-slate-800 text-blue-400'
                 : 'text-slate-400 hover:text-slate-200'
@@ -321,7 +392,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
           <button
             type="button"
             onClick={() => setActiveTab('saved')}
-            className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 cursor-pointer ${
+            className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               activeTab === 'saved'
                 ? 'bg-slate-900 border-t border-x border-slate-800 text-indigo-400'
                 : 'text-slate-400 hover:text-slate-200'
@@ -334,24 +405,56 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5">
+          {tlsPrompt && (
+            <div className="p-4 bg-emerald-950/30 border border-emerald-500/40 rounded-2xl space-y-3" role="alert">
+              <div className="flex items-start gap-2.5 text-xs text-emerald-300">
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-white">تأكيد بصمة شهادة TLS قبل الاتصال (TOFU)</div>
+                  <p className="text-slate-300 leading-relaxed">{tlsPrompt.message}</p>
+                </div>
+              </div>
+              <div className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-emerald-300 break-all" dir="ltr">
+                SHA-256: {tlsPrompt.pendingFingerprint}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleConfirmTofu}
+                  disabled={isConnecting}
+                  className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                >
+                  تثبيت هذه البصمة والاتصال الآمن (TOFU)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTlsPrompt(null)}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'profiles' ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800">
                 <div>
                   <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
                     <span>بروفايلات الاتصال المتعددة بالراوتر</span>
-                    <span className="text-[10px] text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                      تبديل بضغطة زر ⚡
+                    <span className="text-xs text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                      تبديل بضغطة زر
                     </span>
                   </h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-400 mt-0.5">
                     احفظ راوترات متعددة (منزل، مكتب، فرع) وبدّل بينها فورياً دون إعادة إدخال بيانات الاتصال
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setActiveTab('new')}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>إضافة بروفايل</span>
@@ -390,12 +493,12 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                               <div className="flex items-center gap-1.5">
                                 <h4 className="font-bold text-xs text-white">{p.name}</h4>
                                 {isCurrent && (
-                                  <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
+                                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
                                     متصل
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[11px] text-slate-400 font-mono mt-0.5" dir="ltr">
+                              <div className="text-xs text-slate-400 font-mono mt-0.5" dir="ltr">
                                 {p.host}:{p.port || 8728} • {p.username}
                               </div>
                             </div>
@@ -404,16 +507,27 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                           <button
                             type="button"
                             onClick={() => deleteConnectionProfile(p.id)}
-                            className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg transition-colors cursor-pointer"
+                            className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                             title="حذف البروفايل"
+                            aria-label="حذف البروفايل"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
 
                         <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                          <span className="text-[10px] text-slate-400">
-                            {p.password ? '🔐 كلمة المرور محفوظة' : '⚠️ يتطلب كلمة مرور'}
+                          <span className="text-xs text-slate-400 flex items-center gap-1">
+                            {p.password ? (
+                              <>
+                                <Lock className="w-3 h-3 text-emerald-400 shrink-0" />
+                                <span>كلمة المرور محفوظة</span>
+                              </>
+                            ) : (
+                              <>
+                                <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />
+                                <span>يتطلب كلمة مرور</span>
+                              </>
+                            )}
                           </span>
 
                           <button
@@ -428,7 +542,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                               }
                             }}
                             disabled={isConnecting || isCurrent}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md disabled:opacity-50 ${
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                               isCurrent
                                 ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 cursor-default'
                                 : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/20 active:scale-95'
@@ -450,18 +564,18 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
               <div className="flex items-center justify-between bg-blue-950/30 border border-blue-500/20 p-3 rounded-2xl">
                 <div className="flex items-center gap-2">
                   <div className="p-2 bg-blue-500/10 text-blue-400 rounded-xl">
-                    <Radio className="w-4 h-4 animate-pulse" />
+                    <Radio className="w-4 h-4" />
                   </div>
                   <div>
                     <span className="text-xs font-bold text-blue-300 block">كشف الراوترات المتصلة تلقائياً</span>
-                    <span className="text-[10px] text-slate-400 block">فحص حقيقي للشبكة وتعبئة التفاصيل مباشرة</span>
+                    <span className="text-xs text-slate-400 block">فحص حقيقي للشبكة وتعبئة التفاصيل مباشرة</span>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={discoverNetworkRouters}
                   disabled={isDiscovering}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   {isDiscovering ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                   <span>{isDiscovering ? 'جاري الفحص...' : 'فحص الشبكة الآن'}</span>
@@ -482,7 +596,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                           if (r.port && r.port !== 8728) setCustomPort(r.port.toString());
                           setName(r.name);
                         }}
-                        className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between cursor-pointer ${
+                        className={`p-2.5 rounded-xl border text-start transition-all flex items-center justify-between cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                           host === r.host
                             ? 'bg-blue-600/20 border-blue-500 text-white'
                             : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
@@ -490,7 +604,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                       >
                         <div>
                           <div className="text-xs font-bold">{r.name}</div>
-                          <div className="text-[10px] font-mono text-slate-400">{r.host}:{r.port || 8728}</div>
+                          <div className="text-xs font-mono text-slate-400">{r.host}:{r.port || 8728}</div>
                         </div>
                         {host === r.host && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
                       </button>
@@ -498,7 +612,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                   </div>
                 </div>
               ) : discoveryAttempted && !isDiscovering ? (
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-200/90 leading-relaxed space-y-1">
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-200/90 leading-relaxed space-y-1">
                   <div className="font-bold flex items-center gap-1.5 text-amber-400">
                     <Radio className="w-3.5 h-3.5" />
                     <span>تنبيه البيئات السحابية والافتراضية (Cloud & Remote Networks):</span>
@@ -511,25 +625,25 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
 
               {/* Quick Presets */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                <span className="text-[11px] text-slate-400 font-semibold shrink-0">عناوين شائعة:</span>
+                <span className="text-xs text-slate-400 font-semibold shrink-0">عناوين شائعة:</span>
                 <button
                   type="button"
                   onClick={() => fillQuickPreset('192.168.88.1')}
-                  className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-lg text-[11px] font-mono border border-slate-800 transition-colors cursor-pointer"
+                  className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-lg text-xs font-mono border border-slate-800 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   192.168.88.1 (الافتراضي)
                 </button>
                 <button
                   type="button"
                   onClick={() => fillQuickPreset('192.168.1.1')}
-                  className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-lg text-[11px] font-mono border border-slate-800 transition-colors cursor-pointer"
+                  className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-lg text-xs font-mono border border-slate-800 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   192.168.1.1 (LAN)
                 </button>
                 <button
                   type="button"
                   onClick={() => fillQuickPreset('10.0.0.1')}
-                  className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-lg text-[11px] font-mono border border-slate-800 transition-colors cursor-pointer"
+                  className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-lg text-xs font-mono border border-slate-800 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   10.0.0.1
                 </button>
@@ -545,7 +659,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                       type="button"
                       onClick={runPortDiagnostic}
                       disabled={isDiagnosing || !host.trim()}
-                      className="text-[10px] text-blue-400 hover:text-blue-300 disabled:text-slate-600 flex items-center gap-1 cursor-pointer font-bold"
+                      className="text-xs text-blue-400 hover:text-blue-300 disabled:text-slate-600 flex items-center gap-1 cursor-pointer font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                     >
                       {isDiagnosing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
                       <span>فحص المنفذ والاستجابة</span>
@@ -558,11 +672,11 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                     required
                     placeholder="192.168.88.1"
                     autoComplete="off"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 text-left font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 text-left font-mono"
                     dir="ltr"
                   />
                   {diagnosticResult && (
-                    <div className={`mt-1.5 px-2.5 py-1 rounded-lg text-[10px] flex items-center gap-1.5 ${
+                    <div className={`mt-1.5 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 ${
                       diagnosticResult.apiReachable 
                         ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' 
                         : 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
@@ -580,7 +694,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="مثال: راوتر برج الأمل"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
               </div>
@@ -595,7 +709,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                     required
                     placeholder="admin"
                     autoComplete="off"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 text-left font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 text-left font-mono"
                     dir="ltr"
                   />
                 </div>
@@ -603,7 +717,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                 <div>
                   <label className="text-xs font-bold text-slate-300 mb-1.5 flex items-center justify-between">
                     <span>كلمة المرور</span>
-                    <span className="text-[10px] text-emerald-400 font-normal">اختياري</span>
+                    <span className="text-xs text-emerald-400 font-normal">اختياري</span>
                   </label>
                   <div className="relative">
                     <input
@@ -613,13 +727,14 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                       placeholder="فارغة لـ ZCtrl الافتراضي"
                       autoComplete="new-password"
                       data-lpignore="true"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 text-left font-mono pl-9"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 text-left font-mono pl-9"
                       dir="ltr"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer"
+                      aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                     >
                       {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                     </button>
@@ -633,7 +748,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                     value={customPort}
                     onChange={(e) => setCustomPort(e.target.value)}
                     placeholder="تلقائي (فحص 8728 / 8291 / 443)"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 text-left font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 text-left font-mono"
                     dir="ltr"
                   />
                 </div>
@@ -646,16 +761,64 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                     <input
                       type="checkbox"
                       checked={useSsl}
-                      onChange={(e) => setUseSsl(e.target.checked)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseSsl(checked);
+                        if (checked && (!customPort || customPort === '8728')) setCustomPort('8729');
+                      }}
                       className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700 focus:ring-blue-500 cursor-pointer"
                     />
-                    <span>استخدام تشفير آمن SSL / TLS</span>
+                    <span>استخدام تشفير آمن SSL / TLS (منفذ 8729)</span>
                   </label>
                   <div className="text-xs text-blue-400 flex items-center gap-1">
                     <Lock className="w-3.5 h-3.5" />
                     <span>تأمين الاتصال</span>
                   </div>
                 </div>
+                {useSsl && (
+                  <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>تثبيت شهادة TLS (TOFU Certificate Pinning)</span>
+                      </span>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300 font-semibold">
+                        <input
+                          type="checkbox"
+                          checked={strictTls}
+                          onChange={(e) => setStrictTls(e.target.checked)}
+                          className="rounded text-emerald-600 focus:ring-emerald-500 bg-slate-900 border-slate-700"
+                        />
+                        <span>تحقق صارم</span>
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={tlsFingerprint}
+                      onChange={(e) => setTlsFingerprint(e.target.value)}
+                      dir="ltr"
+                      placeholder="SHA-256 Fingerprint (اختياري أو يُطلب تأكيده عند أول اتصال)"
+                      className="w-full h-9 bg-slate-900/90 border border-slate-700/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-lg text-xs text-emerald-300 font-mono placeholder:text-slate-600 px-3 text-left"
+                    />
+                  </div>
+                )}
+                {!useSsl && (
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-2">
+                    <span className="text-xs text-amber-300">
+                      تحذير: المنفذ 8728 غير مشفر. يُنصح بتفعيل <code className="font-mono">api-ssl (8729)</code> لحماية كلمات المرور.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseSsl(true);
+                        setCustomPort('8729');
+                      }}
+                      className="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-bold shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    >
+                      تفعيل 8729
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -663,7 +826,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                 <button
                   type="submit"
                   disabled={isConnecting}
-                  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50 text-xs cursor-pointer"
+                  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50 text-xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   {isConnecting ? (
                     <>
@@ -682,7 +845,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                   type="button"
                   onClick={handleSaveAndConnect}
                   disabled={isConnecting}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3 px-4 rounded-xl border border-slate-700 flex items-center gap-2 transition-all disabled:opacity-50 text-xs cursor-pointer"
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3 px-4 rounded-xl border border-slate-700 flex items-center gap-2 transition-all disabled:opacity-50 text-xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   <BookmarkPlus className="w-4 h-4 text-blue-400" />
                   <span>حفظ واتصال</span>
@@ -696,8 +859,9 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                   <Server className="w-10 h-10 mx-auto text-slate-600" />
                   <p className="text-xs">لا توجد أجهزة ZCtrl محفوظة حالياً</p>
                   <button
+                    type="button"
                     onClick={() => setActiveTab('new')}
-                    className="text-xs text-blue-400 hover:underline font-bold cursor-pointer"
+                    className="text-xs text-blue-400 hover:underline font-bold cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                   >
                     أضف أول جهاز ZCtrl الآن
                   </button>
@@ -722,12 +886,12 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                           <div className="flex items-center gap-2">
                             <h4 className="font-bold text-xs text-slate-100">{r.name}</h4>
                             {isCurrent && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-bold">
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-bold">
                                 متصل
                               </span>
                             )}
                           </div>
-                          <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2 font-mono" dir="ltr">
+                          <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2 font-mono" dir="ltr">
                             <span>{r.host}</span>
                             <span>•</span>
                             <span>{r.username}</span>
@@ -737,9 +901,10 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
 
                       <div className="flex items-center gap-2">
                         <button
+                          type="button"
                           onClick={() => handleConnectSaved(r)}
                           disabled={isConnecting && selectedSavedId === r.id}
-                          className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all shadow-md shadow-blue-600/20 cursor-pointer"
+                          className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all shadow-md shadow-blue-600/20 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                         >
                           {isConnecting && selectedSavedId === r.id ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -749,8 +914,10 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                           <span>اتصال</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => deleteSavedRouter(r.id)}
-                          className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
+                          aria-label="حذف من الأجهزة المحفوظة"
+                          className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                           title="حذف من الأجهزة المحفوظة"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -779,13 +946,13 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                   autoFocus
                   autoComplete="new-password"
                   data-lpignore="true"
-                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono text-left"
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 font-mono text-left"
                   dir="ltr"
                 />
                 <button
                   type="submit"
                   disabled={isConnecting}
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   {isConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
                   <span>دخول</span>
@@ -793,7 +960,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
                 <button
                   type="button"
                   onClick={() => setActiveSavedTarget(null)}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl cursor-pointer"
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                 >
                   إلغاء
                 </button>
@@ -802,7 +969,7 @@ export const ConnectRouterModal: React.FC<ConnectRouterModalProps> = ({ isOpen, 
           )}
 
           {/* Security Notice */}
-          <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-2">
+          <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 text-xs text-slate-400 flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>حماية مشددة: لا يتم حفظ أو تخزين كلمة مرور الأدمن نهائياً في المتصفح أو أي ذاكرة محلية.</span>
           </div>

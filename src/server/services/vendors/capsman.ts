@@ -93,7 +93,9 @@ export async function fetchCapsManInfo(client: any, rawMac: string): Promise<Ven
         result.clients = clients;
         result.clientsCount = clients.length;
       }
-    } catch {}
+    } catch (err: any) {
+      logger.warn('CAPsMAN', 'تعذر قراءة جدول تسجيل CAPsMAN', err?.message);
+    }
 
     result.uptime = cap.uptime || '';
     result.firmwareVersion = cap.version || '';

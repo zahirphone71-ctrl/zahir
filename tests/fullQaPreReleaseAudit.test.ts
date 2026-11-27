@@ -129,28 +129,31 @@ test('Pillar 1 (Edge & Boundary): HTTP API gracefully rejects malformed JSON, em
     });
     assert.equal(malformed.status, 400);
 
-    // 2. Empty body on command endpoint -> HTTP 401 or 400 (never 500)
+    // 2. Empty body on command endpoint -> HTTP 400 or 503 reconnecting (never 500 or false 401 logout)
     const emptyCmd = await fetch(`${baseUrl}/api/mikrotik/command`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
-    assert.ok(emptyCmd.status === 400 || emptyCmd.status === 401);
+    assert.ok(emptyCmd.status === 400 || emptyCmd.status === 503);
 
-    // 3. Offline batch & quick-harden return structured JSON 401 (never unhandled crash)
+    // 3. Offline batch & quick-harden return structured JSON 503 reconnecting (never false 401 or crash)
     const offlineBatch = await fetch(`${baseUrl}/api/mikrotik/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ queries: [{ endpoint: '/system/identity/print' }] })
     });
-    assert.equal(offlineBatch.status, 401);
+    assert.equal(offlineBatch.status, 503);
     const offlineBatchJson: any = await offlineBatch.json();
     assert.equal(offlineBatchJson.success, false);
+    assert.equal(offlineBatchJson.reconnecting, true);
 
     const offlineHarden = await fetch(`${baseUrl}/api/mikrotik/firewall/quick-harden`, {
       method: 'POST'
     });
-    assert.equal(offlineHarden.status, 401);
+    assert.equal(offlineHarden.status, 503);
+    const offlineHardenJson: any = await offlineHarden.json();
+    assert.equal(offlineHardenJson.reconnecting, true);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -408,14 +411,18 @@ test('Pillar 4 & 5 (RTL, Print, Cleanup & Packaging): Verifies Arabic RTL HTML, 
   assert.deepEqual(consoleLogViolations, [], `Frontend files must not contain console.log/debug: ${consoleLogViolations.join(', ')}`);
   assert.deepEqual(debuggerViolations, [], `Frontend files must not contain debugger statements: ${debuggerViolations.join(', ')}`);
 
-  // 4. Electron Windows Packaging Integrity (package.json & scripts/build-win.js)
+  // 4. Electron Windows Packaging Integrity (electron-builder.json as single source of truth & scripts/build-win.js)
   const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+  const electronBuilderCfg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'electron-builder.json'), 'utf8'));
   const buildWinSrc = fs.readFileSync(path.join(process.cwd(), 'scripts/build-win.js'), 'utf8');
 
-  for (const requiredAsset of ['dist/**/*', 'electron-main.cjs', 'electron-preload.cjs', 'package.json', 'icon.ico']) {
-    assert.ok(pkg.build.files.includes(requiredAsset), `package.json build.files missing ${requiredAsset}`);
-    assert.ok(buildWinSrc.includes(`'${requiredAsset}'`), `scripts/build-win.js config.files missing ${requiredAsset}`);
+  assert.equal(pkg.build, undefined, 'package.json must not duplicate build config (electron-builder.json is single source)');
+  assert.equal(electronBuilderCfg.asar, true);
+  assert.equal(electronBuilderCfg.directories?.buildResources, 'assets');
+  for (const requiredAsset of ['dist/**/*', 'electron-main.cjs', 'electron-preload.cjs', 'package.json', 'assets/**/*', 'icon.ico']) {
+    assert.ok(electronBuilderCfg.files.includes(requiredAsset), `electron-builder.json files missing ${requiredAsset}`);
   }
+  assert.ok(buildWinSrc.includes('electron-builder.json'), 'scripts/build-win.js must read electron-builder.json');
   assert.equal(fs.existsSync(path.join(process.cwd(), 'electron-main.cjs')), true);
   assert.equal(fs.existsSync(path.join(process.cwd(), 'electron-preload.cjs')), true);
 });

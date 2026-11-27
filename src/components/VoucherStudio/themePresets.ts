@@ -39,22 +39,38 @@ export const DECORATION_DEFS: Record<string, DecorationDef> = {
   'corner-arcs': {
     id: 'corner-arcs',
     render: (s) => {
-      const size = Math.max(6, 14 * s);
-      const bw = Math.max(1, 2 * s);
+      const size = Math.max(8, Math.round(14 * s));
+      const bw = Math.max(1, Number((2 * s).toFixed(1)));
+      const vb = size + bw * 2;
+      const cornerSvg = (posStyle: string, d: string) =>
+        `<svg width="${vb}" height="${vb}" viewBox="0 0 ${vb} ${vb}" style="position:absolute;${posStyle}pointer-events:none;"><path d="${d}" stroke="#d97706" stroke-width="${bw}" fill="none" stroke-linecap="round"/></svg>`;
       return {
         style: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 },
-        svg: `<svg style="position:absolute;inset:0;width:100%;height:100%"><path d="M ${size} 2 Q 2 2 2 ${size}" stroke="#d97706" stroke-width="${bw}" fill="none"/><path d="M calc(100% - ${size}) 2 Q calc(100% - 2) 2 calc(100% - 2) ${size}" stroke="#d97706" stroke-width="${bw}" fill="none"/><path d="M 2 calc(100% - ${size}) Q 2 calc(100% - 2) ${size} calc(100% - 2)" stroke="#d97706" stroke-width="${bw}" fill="none"/><path d="M calc(100% - 2) calc(100% - ${size}) Q calc(100% - 2) calc(100% - 2) calc(100% - ${size}) calc(100% - 2)" stroke="#d97706" stroke-width="${bw}" fill="none"/></svg>`,
+        svg: [
+          cornerSvg('top:2px;left:2px;', `M ${size} ${bw} Q ${bw} ${bw} ${bw} ${size}`),
+          cornerSvg('top:2px;right:2px;', `M ${bw} ${bw} Q ${size} ${bw} ${size} ${size}`),
+          cornerSvg('bottom:2px;left:2px;', `M ${bw} ${bw} Q ${bw} ${size} ${size} ${size}`),
+          cornerSvg('bottom:2px;right:2px;', `M ${size} ${bw} Q ${size} ${size} ${bw} ${size}`),
+        ].join(''),
       };
     },
   },
   'cyan-brackets': {
     id: 'cyan-brackets',
     render: (s) => {
-      const w = Math.max(8, 16 * s);
-      const bw = Math.max(1, 2 * s);
+      const w = Math.max(8, Math.round(16 * s));
+      const bw = Math.max(1, Number((2 * s).toFixed(1)));
+      const vb = w + bw * 2;
+      const bracketSvg = (posStyle: string, d: string) =>
+        `<svg width="${vb}" height="${vb}" viewBox="0 0 ${vb} ${vb}" style="position:absolute;${posStyle}pointer-events:none;"><path d="${d}" stroke="#22d3ee" stroke-width="${bw}" fill="none" stroke-linecap="square"/></svg>`;
       return {
         style: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 },
-        svg: `<svg style="position:absolute;inset:0;width:100%;height:100%"><path d="M 2 ${w} L 2 2 L ${w} 2" stroke="#22d3ee" stroke-width="${bw}" fill="none"/><path d="M calc(100% - 2) ${w} L calc(100% - 2) 2 L calc(100% - ${w}) 2" stroke="#22d3ee" stroke-width="${bw}" fill="none"/><path d="M 2 calc(100% - ${w}) L 2 calc(100% - 2) L ${w} calc(100% - 2)" stroke="#22d3ee" stroke-width="${bw}" fill="none"/><path d="M calc(100% - 2) calc(100% - ${w}) L calc(100% - 2) calc(100% - 2) L calc(100% - ${w}) calc(100% - 2)" stroke="#22d3ee" stroke-width="${bw}" fill="none"/></svg>`,
+        svg: [
+          bracketSvg('top:2px;left:2px;', `M ${bw} ${w} L ${bw} ${bw} L ${w} ${bw}`),
+          bracketSvg('top:2px;right:2px;', `M ${bw} ${bw} L ${w} ${bw} L ${w} ${w}`),
+          bracketSvg('bottom:2px;left:2px;', `M ${bw} ${bw} L ${bw} ${w} L ${w} ${w}`),
+          bracketSvg('bottom:2px;right:2px;', `M ${w} ${bw} L ${w} ${w} L ${bw} ${w}`),
+        ].join(''),
       };
     },
   },

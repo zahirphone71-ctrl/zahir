@@ -2,30 +2,15 @@
 <html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <style>
-      html, body, #root { background-color: #020617; color: #f8fafc; color-scheme: dark; margin: 0; padding: 0; }
-    </style>
-    <script>
-      (function() {
-        try {
-          var _f = window.fetch;
-          Object.defineProperty(window, 'fetch', {
-            get: function() { return _f; },
-            set: function(v) { _f = v; },
-            configurable: true,
-            enumerable: true
-          });
-        } catch (e) {}
-      })();
-    </script>
+    <link rel="stylesheet" href="/theme-init.css" />
+    <script src="/theme-init.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http:; style-src 'self' 'unsafe-inline' https: http:; img-src 'self' data: blob: https: http:; font-src 'self' data: https: http:; connect-src 'self' ws: wss: https: http:;" />
-    <title>Remix ZCtrl</title>
+    <title>ZCtrl</title>
     <meta name="description" content="برنامج وتطبيق شامل لإدارة سيرفرات وأجهزة المايكروتك MikroTik RouterOS، إدارة مستخدمي الهوتسبوت وبروفايلاتهم، توليد الكروت والبطاقات وطباعتها، مراقبة السرعات والجلسات النشطة، والتحكم الكامل بالشبكة." />
-    <meta property="og:title" content="Remix ZCtrl" />
+    <meta property="og:title" content="ZCtrl" />
     <meta property="og:description" content="برنامج وتطبيق شامل لإدارة سيرفرات وأجهزة المايكروتك MikroTik RouterOS، إدارة مستخدمي الهوتسبوت وبروفايلاتهم، توليد الكروت والبطاقات وطباعتها، مراقبة السرعات والجلسات النشطة، والتحكم الكامل بالشبكة." />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icon.png" />
@@ -33,14 +18,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#0f172a" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@400;500;600;700;800&family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#020617" />
   </head>
   <body class="bg-slate-950 text-slate-100 antialiased selection:bg-blue-600 selection:text-white min-h-screen w-full overflow-x-hidden">
     <div id="root" class="min-h-screen w-full flex flex-col bg-slate-950"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

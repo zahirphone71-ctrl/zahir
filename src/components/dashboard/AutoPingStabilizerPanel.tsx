@@ -12,10 +12,15 @@ import {
   AlertTriangle,
   Power,
   Radio,
-  Cpu
+  Cpu,
+  X
 } from 'lucide-react';
-import { useMikroTik } from '../../context/MikroTikContext';
-import type { PingStabilizerMode, PingStabilizerState } from '../../context/mikrotikContextTypes';
+import {
+  useConnectionSession,
+  useRouterTelemetry,
+  useMikroTikActions
+} from '../../context/MikroTikContext';
+import type { PingStabilizerMode, PingStabilizerState, QosRulePreview } from '../../context/mikrotikContextTypes';
 import { formatBytes } from '../../lib/formatters';
 
 const MODE_OPTIONS: Array<{
@@ -62,20 +67,29 @@ const STATE_META: Record<
 };
 
 export const AutoPingStabilizerPanel: React.FC = () => {
+  const { isConnected } = useConnectionSession();
   const {
     router,
-    isConnected,
     pingStabilizer,
     isOptimizingPing,
+    activeRealtimeFrequencySec
+  } = useRouterTelemetry();
+  const {
     refreshPingStabilizer,
     updatePingStabilizerConfig,
     optimizePingNow,
     toggleQosFastLane,
-    activeRealtimeFrequencySec
-  } = useMikroTik();
+    previewQosFastLane
+  } = useMikroTikActions();
 
   const [isUpdatingConfig, setIsUpdatingConfig] = useState(false);
   const [isTogglingQos, setIsTogglingQos] = useState(false);
+  const [isQosModalOpen, setIsQosModalOpen] = useState(false);
+  const [isLoadingQosPreview, setIsLoadingQosPreview] = useState(false);
+  const [qosPreviewRules, setQosPreviewRules] = useState<QosRulePreview[]>([]);
+  const [qosInterfaceList, setQosInterfaceList] = useState('WAN');
+  const [qosMaxLimit, setQosMaxLimit] = useState('10M');
+  const [qosPreviewError, setQosPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isConnected) return;
@@ -93,7 +107,7 @@ export const AutoPingStabilizerPanel: React.FC = () => {
   const mode: PingStabilizerMode = pingStabilizer?.mode || 'auto';
   const targetPingMs = pingStabilizer?.targetPingMs || 45;
   const maxConcurrent = pingStabilizer?.recommendedMaxConcurrent ?? 2;
-  const pacingMs = pingStabilizer?.recommendedPacingMs ?? 20;
+  const pacingMs = pingStabilizer?.recommendedPacingMs ?? 8;
   const wsSec = pingStabilizer?.recommendedWsIntervalMs
     ? Math.round((pingStabilizer.recommendedWsIntervalMs / 1000) * 10) / 10
     : activeRealtimeFrequencySec;
@@ -135,11 +149,57 @@ export const AutoPingStabilizerPanel: React.FC = () => {
     await optimizePingNow({ count: 3, applyQos: false });
   };
 
+  const loadQosPreview = async (ifaceList: string, limit: string) => {
+    setIsLoadingQosPreview(true);
+    setQosPreviewError(null);
+    try {
+      const res = await previewQosFastLane({
+        prioritizeManagementApi: true,
+        interfaceList: ifaceList,
+        maxLimit: limit
+      });
+      if (res.success && Array.isArray(res.rules)) {
+        setQosPreviewRules(res.rules);
+        if (res.interfaceList) setQosInterfaceList(res.interfaceList);
+        if (res.maxLimit) setQosMaxLimit(res.maxLimit);
+      } else {
+        setQosPreviewError(res.message || 'تعذر تحميل معاينة القواعد');
+      }
+    } finally {
+      setIsLoadingQosPreview(false);
+    }
+  };
+
   const handleToggleQos = async () => {
+    if (!isConnected || isTogglingQos) return;
+    if (qosActive) {
+      setIsTogglingQos(true);
+      try {
+        await toggleQosFastLane(false, true);
+      } finally {
+        setIsTogglingQos(false);
+      }
+      return;
+    }
+    const defaultIface = qos?.interfaceList || 'WAN';
+    const defaultLimit = qos?.maxLimit || '10M';
+    setQosInterfaceList(defaultIface);
+    setQosMaxLimit(defaultLimit);
+    setIsQosModalOpen(true);
+    await loadQosPreview(defaultIface, defaultLimit);
+  };
+
+  const handleConfirmApplyQos = async () => {
     if (!isConnected || isTogglingQos) return;
     setIsTogglingQos(true);
     try {
-      await toggleQosFastLane(!qosActive, true);
+      const res = await toggleQosFastLane(true, true, {
+        interfaceList: qosInterfaceList.trim() || 'WAN',
+        maxLimit: qosMaxLimit.trim() || '10M'
+      });
+      if (res.success) {
+        setIsQosModalOpen(false);
+      }
     } finally {
       setIsTogglingQos(false);
     }
@@ -208,7 +268,7 @@ export const AutoPingStabilizerPanel: React.FC = () => {
                 ? 'bg-emerald-600/20 hover:bg-emerald-600/30 border-emerald-500/45 text-emerald-200'
                 : 'bg-slate-800/80 hover:bg-slate-700/80 border-slate-700 text-slate-200'
             }`}
-            title="ينشئ قواعد Mangle + Queue Tree بأولوية 1 لحزم ICMP و DNS و TCP ACK وإدارة المايكروتك بدون تكرار"
+            title="معاينة وتطبيق قواعد Mangle مقيّدة بواجهة محددة (ICMP و DNS وإدارة المايكروتك) + Queue Tree بحد أقصى للسرعة"
           >
             {isTogglingQos ? (
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -336,7 +396,7 @@ export const AutoPingStabilizerPanel: React.FC = () => {
           <div className="text-[10px] text-slate-500 font-mono tabular-nums mt-1" dir="ltr">
             {qosActive && qos
               ? `${qos.fastLanePackets.toLocaleString()} pkt • ${formatBytes(qos.fastLaneBytes || 0, 0)}`
-              : 'Priority 1 ICMP/DNS/ACK'}
+              : 'Priority 1 ICMP/DNS/MGMT'}
           </div>
         </div>
       </div>
@@ -480,6 +540,140 @@ export const AutoPingStabilizerPanel: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* QoS Fast-Lane Preview & Confirmation Modal */}
+      {isQosModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+          dir="rtl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qos-preview-modal-title"
+        >
+          <div className="bg-slate-900 border border-slate-700/80 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[88vh]">
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 id="qos-preview-modal-title" className="text-sm sm:text-base font-extrabold text-slate-100">
+                    معاينة وتأكيد قواعد أولوية البينج (QoS Fast-Lane)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    سيتم تطبيق القواعد التالية فقط مع حصرها على واجهة محددة وحد أقصى للسرعة لمنع التأثير على بقية الشبكة
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsQosModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-100 rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 custom-scrollbar">
+              {/* Scoping Controls */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/70 border border-slate-800 rounded-2xl p-3.5">
+                <label className="space-y-1 text-xs">
+                  <span className="text-slate-300 font-bold block">قائمة الواجهات (in-interface-list)</span>
+                  <input
+                    type="text"
+                    value={qosInterfaceList}
+                    onChange={(e) => setQosInterfaceList(e.target.value)}
+                    placeholder="WAN"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                    dir="ltr"
+                  />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="text-slate-300 font-bold block">سقف السرعة الأقصى (max-limit)</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={qosMaxLimit}
+                      onChange={(e) => setQosMaxLimit(e.target.value)}
+                      placeholder="10M"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                      dir="ltr"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => loadQosPreview(qosInterfaceList.trim() || 'WAN', qosMaxLimit.trim() || '10M')}
+                      disabled={isLoadingQosPreview}
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-bold shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      تحديث
+                    </button>
+                  </div>
+                </label>
+              </div>
+
+              {qosPreviewError && (
+                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/40 text-rose-200 text-xs">
+                  {qosPreviewError}
+                </div>
+              )}
+
+              {/* Rules Preview List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-300 font-bold">
+                  <span>القواعد التي ستُضاف على الراوتر:</span>
+                  <span className="text-[11px] text-slate-400 font-mono">{qosPreviewRules.length} قواعد</span>
+                </div>
+
+                {isLoadingQosPreview ? (
+                  <div className="py-8 flex items-center justify-center gap-2 text-xs text-slate-400">
+                    <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />
+                    <span>جاري تحضير المعاينة...</span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {qosPreviewRules.map((rule, idx) => (
+                      <div
+                        key={`${rule.chain}-${idx}`}
+                        className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-100">{rule.description}</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/15 border border-cyan-500/30 text-cyan-300" dir="ltr">
+                            {rule.chain} → {rule.target}
+                          </span>
+                        </div>
+                        <div className="text-[11px] font-mono text-slate-400 break-all" dir="ltr">
+                          {rule.params.join(' ')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-800 flex items-center justify-end gap-2.5 bg-slate-900/90">
+              <button
+                type="button"
+                onClick={() => setIsQosModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-apply-qos"
+                onClick={handleConfirmApplyQos}
+                disabled={isTogglingQos || isLoadingQosPreview || qosPreviewRules.length === 0}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isTogglingQos ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                <span>تأكيد وتطبيق على الراوتر</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

@@ -1,5 +1,9 @@
 import { Server as HttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { isAllowedOrigin } from "./security-shield.ts";
+import { runActivePingProbe } from "./ping-stabilizer.ts";
+import { appLogger } from "./rotatingLogger.ts";
+import { normalizeDhcpLeaseRow, normalizeSimpleQueueRow } from "./utils/routerNormalizers.ts";
 
 export interface RealtimeTelemetry {
   type: string;
@@ -37,6 +41,7 @@ export class RealtimeSyncServer {
   private isTickRunning = false;
   private isDestroyed = false;
   private getClient: (token?: string) => any;
+  private onActivity?: (token?: string) => void;
 
   // Rate tracking maps for bps calculations
   private interfaceRates = new Map<string, RateTracker>();
@@ -45,9 +50,9 @@ export class RealtimeSyncServer {
   // Router hardware & ping stabilizer metrics cache
   private latestCpuLoad = 0;
   private latestPingMs = 0;
-  private latestStabilizerIntervalMs = 5000;
+  private latestStabilizerIntervalMs = 7500;
   private isThermalThrottling = false;
-  private baseIntervalMs = 5000;
+  private baseIntervalMs = 8000;
   private tickCounter = 0;
 
   // Staggered telemetry timestamps to prevent router CPU spikes
@@ -55,23 +60,63 @@ export class RealtimeSyncServer {
   private lastLeasesFetch = 0;
   private lastLogsFetch = 0;
   private lastHealthFetch = 0;
+  private lastIcmpProbeAt = 0;
+  private isIcmpProbeInFlight = false;
   private cachedCpuTemp: number | undefined = undefined;
   private cachedBoardTemp: number | undefined = undefined;
 
-  constructor(getClient: (token?: string) => any) {
+  constructor(getClient: (token?: string) => any, onActivity?: (token?: string) => void) {
     this.getClient = getClient;
+    this.onActivity = onActivity;
+  }
+
+  private extractSessionCookieToken(cookieHeader: string | undefined): string {
+    if (!cookieHeader || typeof cookieHeader !== "string") return "";
+    for (const part of cookieHeader.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx <= 0) continue;
+      if (part.slice(0, idx).trim() === "zctrl_rt") {
+        const rawVal = part.slice(idx + 1).trim();
+        try {
+          return decodeURIComponent(rawVal);
+        } catch {
+          return rawVal;
+        }
+      }
+    }
+    return "";
   }
 
   public attach(server: HttpServer): void {
     this.wss = new WebSocketServer({ server, path: "/api/ws/realtime" });
 
     this.wss.on("connection", (ws: WebSocket, req) => {
-      let token = "";
-      try {
-        const url = new URL(req.url || "", "http://localhost");
-        token = url.searchParams.get("token") || "";
-      } catch {
-        // fallback
+      const origin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+      if (origin) {
+        let sameHost = false;
+        try {
+          const parsedOrigin = new URL(origin);
+          const reqHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim().toLowerCase();
+          sameHost = Boolean(reqHost && parsedOrigin.host.toLowerCase() === reqHost);
+        } catch {
+          sameHost = false;
+        }
+        if (!sameHost && !isAllowedOrigin(origin)) {
+          try {
+            ws.close(1008, "Origin not allowed");
+          } catch (closeErr) {
+            appLogger.warn("realtime-ws", "Failed to close rejected WebSocket origin cleanly", {
+              error: closeErr instanceof Error ? closeErr.message : String(closeErr)
+            });
+          }
+          return;
+        }
+      }
+
+      // Authenticate strictly via HttpOnly session cookie or subsequent auth/subscribe message (never URL ?token=)
+      const token = this.extractSessionCookieToken(typeof req.headers.cookie === "string" ? req.headers.cookie : undefined);
+      if (token) {
+        this.onActivity?.(token);
       }
 
       const clientMeta: WebSocketClientMeta = {
@@ -79,7 +124,7 @@ export class RealtimeSyncServer {
         token,
         channels: new Set(["traffic", "sessions", "system"]),
         activeTab: "dashboard",
-        intervalMs: 5000,
+        intervalMs: 8000,
         isAlive: true,
         isHidden: false,
         isIdle: false,
@@ -104,10 +149,12 @@ export class RealtimeSyncServer {
 
       ws.on("pong", () => {
         clientMeta.isAlive = true;
+        if (clientMeta.token) this.onActivity?.(clientMeta.token);
       });
 
       ws.on("message", (raw) => {
         clientMeta.lastMessageTime = Date.now();
+        if (clientMeta.token) this.onActivity?.(clientMeta.token);
         try {
           const msg = JSON.parse(raw.toString());
           this.handleClientMessage(clientMeta, msg);
@@ -137,7 +184,11 @@ export class RealtimeSyncServer {
         if (!client.isAlive) {
           try {
             client.ws.terminate();
-          } catch {}
+          } catch (termErr) {
+            appLogger.warn("realtime-ws", "Failed to terminate unresponsive WebSocket client", {
+              error: termErr instanceof Error ? termErr.message : String(termErr)
+            });
+          }
           this.clients.delete(client);
           continue;
         }
@@ -158,7 +209,28 @@ export class RealtimeSyncServer {
   private handleClientMessage(client: WebSocketClientMeta, msg: any): void {
     if (!msg || typeof msg !== "object") return;
 
+    if (typeof msg.token === "string" && msg.token.trim()) {
+      client.token = msg.token.trim();
+      this.onActivity?.(client.token);
+    }
+
     switch (msg.type) {
+      case "auth": {
+        this.sendSafe(client.ws, {
+          type: "auth_ack",
+          authenticated: Boolean(client.token),
+          timestamp: Date.now()
+        });
+        if (client.token) {
+          this.triggerImmediatePush(client).catch((err) => {
+            appLogger.warn("realtime-ws", "Immediate push after WS auth failed", {
+              error: err instanceof Error ? err.message : String(err)
+            });
+          });
+        }
+        break;
+      }
+
       case "subscribe": {
         client.channels.clear();
         client.channels.add("system");
@@ -183,7 +255,11 @@ export class RealtimeSyncServer {
           intervalMs: client.intervalMs
         });
 
-        this.triggerImmediatePush(client).catch(() => {});
+        this.triggerImmediatePush(client).catch((err) => {
+          appLogger.warn("realtime-ws", "Immediate push after subscribe failed", {
+            error: err instanceof Error ? err.message : String(err)
+          });
+        });
         this.ensureTicker();
         break;
       }
@@ -274,21 +350,21 @@ export class RealtimeSyncServer {
     if (allHidden) return 35000;
 
     const allIdle = clientList.every((c) => c.isIdle || c.isHidden);
-    if (allIdle) return 22000;
+    if (allIdle) return 28000;
 
     // Respect client's requested floor interval as well as Auto-Ping Stabilizer & CPU load
     const minClientInterval = Math.max(
-      this.baseIntervalMs,
+      6000,
       Math.min(...clientList.filter((c) => !c.isHidden).map((c) => c.intervalMs || this.baseIntervalMs))
     );
 
     let adaptive = Math.max(minClientInterval, this.latestStabilizerIntervalMs);
 
-    if (this.latestCpuLoad > 85) adaptive = Math.max(adaptive, 18000);
-    else if (this.latestCpuLoad > 70) adaptive = Math.max(adaptive, 12000);
-    else if (this.latestCpuLoad > 55) adaptive = Math.max(adaptive, 8000);
+    if (this.latestCpuLoad > 85) adaptive = Math.max(adaptive, 22000);
+    else if (this.latestCpuLoad > 70) adaptive = Math.max(adaptive, 15000);
+    else if (this.latestCpuLoad > 55) adaptive = Math.max(adaptive, 10000);
 
-    return Math.min(35000, adaptive);
+    return Math.min(40000, adaptive);
   }
 
   private scheduleNextTick(forcedDelayMs?: number): void {
@@ -370,7 +446,13 @@ export class RealtimeSyncServer {
     const needsSessions = !suppressHeavy && (client.channels.has("sessions") || client.channels.has("all"));
     const needsQueues = !suppressHeavy && client.activeTab === "queues" && client.channels.has("queues");
     const needsLeases = !suppressHeavy && client.activeTab === "dhcp" && client.channels.has("leases");
-    const needsLogs = !suppressHeavy && client.activeTab === "logs" && client.channels.has("logs");
+    const needsLogs =
+      !suppressHeavy &&
+      !client.isHidden &&
+      !client.isIdle &&
+      client.activeTab === "logs" &&
+      client.channels.has("logs") &&
+      now - this.lastLogsFetch >= 60000;
 
     // Execute sequentially (or at most 2) to respect RouterOS CPU & Ping budget
     const payloads: RealtimeTelemetry[] = [];
@@ -395,6 +477,7 @@ export class RealtimeSyncServer {
       if (l) payloads.push(l);
     }
     if (needsLogs) {
+      this.lastLogsFetch = Date.now();
       const lg = await this.fetchLogsTelemetry(routerClient);
       if (lg) payloads.push(lg);
     }
@@ -439,7 +522,10 @@ export class RealtimeSyncServer {
       if (c.channels.has("system") || c.channels.has("all")) needSystem = true;
       if (c.channels.has("queues") || c.channels.has("all")) needQueues = true;
       if (c.channels.has("leases") || c.channels.has("all")) needLeases = true;
-      if (c.channels.has("logs") || c.channels.has("all")) needLogs = true;
+      // Never pull /log/print in background unless a visible active client is viewing the logs tab
+      if (!c.isHidden && !c.isIdle && c.activeTab === "logs" && (c.channels.has("logs") || c.channels.has("all"))) {
+        needLogs = true;
+      }
     }
 
     // Thermal check: If router CPU is high, throttle interval
@@ -474,7 +560,7 @@ export class RealtimeSyncServer {
     // Stagger heavy queries: Do not pull queues, leases, or logs on every single tick
     const shouldFetchQueues = needQueues && !suppressHeavy && (force || now - this.lastQueuesFetch > 35000);
     const shouldFetchLeases = needLeases && !suppressHeavy && (force || now - this.lastLeasesFetch > 40000);
-    const shouldFetchLogs = needLogs && !suppressHeavy && (force || now - this.lastLogsFetch > 30000);
+    const shouldFetchLogs = needLogs && !suppressHeavy && (force || now - this.lastLogsFetch > 60000);
 
     // Always pull lightweight system telemetry first so CPU & Ping stabilizer stay accurate
     if (needSystem) {
@@ -524,6 +610,33 @@ export class RealtimeSyncServer {
         await new Promise((r) => setTimeout(r, 100));
       }
     }
+
+    // Periodic real ICMP Ping probe (2 packets every 45s) decoupled from API RTT
+    const hasActiveViewers = Array.from(this.clients).some((c) => !c.isHidden && !c.isIdle);
+    const stabilizerEnabled = !stabilizer || stabilizer.getSnapshot().mode !== "off";
+    if (
+      hasActiveViewers &&
+      stabilizerEnabled &&
+      !this.isIcmpProbeInFlight &&
+      this.latestCpuLoad <= 75 &&
+      (force || now - this.lastIcmpProbeAt >= 45000)
+    ) {
+      this.isIcmpProbeInFlight = true;
+      this.lastIcmpProbeAt = Date.now();
+      try {
+        const probe = await runActivePingProbe(routerClient, { target: "1.1.1.1", count: 2 });
+        if (probe.source === "router_icmp" && stabilizer) {
+          const updatedSnap = stabilizer.getSnapshot();
+          this.latestStabilizerIntervalMs = stabilizer.getRecommendedWsIntervalMs();
+          this.latestPingMs = probe.avgPingMs;
+          this.broadcastStabilizerUpdate(updatedSnap);
+        }
+      } catch {
+        // Ignore transient ICMP probe errors
+      } finally {
+        this.isIcmpProbeInFlight = false;
+      }
+    }
   }
 
   private broadcastChannelData(payload: RealtimeTelemetry): void {
@@ -537,6 +650,9 @@ export class RealtimeSyncServer {
 
     const now = Date.now();
     for (const client of this.clients) {
+      if (client.token) {
+        this.onActivity?.(client.token);
+      }
       if (client.channels.has(channelName) || client.channels.has("all")) {
         // If client is hidden, throttle outbound broadcasts to at most once every 10 seconds
         if (client.isHidden && now - client.lastOutboundTime < 10000) {
@@ -649,7 +765,7 @@ export class RealtimeSyncServer {
         this.cachedBoardTemp = boardTemp;
       }
 
-      const pingMs = typeof client.getLatency === "function" ? client.getLatency() : 3;
+      const pingMs = typeof client.getLatency === "function" ? client.getLatency() : 0;
       this.latestPingMs = pingMs;
 
       // Feed live CPU & temperature metrics directly into MikrotikClient throttler & AutoPingStabilizer!
@@ -691,17 +807,7 @@ export class RealtimeSyncServer {
       ], { rapid: true });
 
       const queues = Array.isArray(raw)
-        ? raw.map((q) => ({
-            id: q[".id"] || q.id || q.name,
-            name: q.name || "",
-            target: q.target || q["target-addresses"] || "",
-            maxLimit: q["max-limit"] || q.maxLimit || "",
-            limitAt: q["limit-at"] || q.limitAt || "",
-            bytes: q.bytes || "0/0",
-            packets: q.packets || "0/0",
-            disabled: q.disabled === "true" || q.disabled === true || q.disabled === "yes",
-            priority: q.priority || "8/8"
-          }))
+        ? raw.map(normalizeSimpleQueueRow).filter(Boolean)
         : [];
 
       return {
@@ -722,29 +828,7 @@ export class RealtimeSyncServer {
       ], { rapid: true });
 
       const leases = Array.isArray(raw)
-        ? raw.map((l) => {
-            if (!l) return null;
-            const mac = l["mac-address"] || l.macAddress || "";
-            const host = l["host-name"] || l.hostName || "";
-            const isDyn = l.dynamic === "true" || l.dynamic === true || l.dynamic === "yes" || l.isDynamic || false;
-            const isDisabled = l.disabled === "true" || l.disabled === true || l.disabled === "yes" || l.disabled || false;
-            return {
-              id: l[".id"] || l.id || `lease-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-              address: l.address || "",
-              macAddress: mac,
-              "mac-address": mac,
-              hostName: host,
-              "host-name": host,
-              server: l.server || "all",
-              status: l.status || "bound",
-              expiresAfter: l["expires-after"] || l.expiresAfter || "",
-              "expires-after": l["expires-after"] || l.expiresAfter || "",
-              isDynamic: isDyn,
-              dynamic: isDyn ? "true" : "false",
-              comment: l.comment || "",
-              disabled: isDisabled
-            };
-          }).filter(Boolean)
+        ? raw.map(normalizeDhcpLeaseRow).filter(Boolean)
         : [];
 
       return {
@@ -898,7 +982,11 @@ export class RealtimeSyncServer {
     if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(JSON.stringify(payload));
-      } catch {}
+      } catch (err) {
+        appLogger.warn("realtime-ws", "Failed to send WebSocket message", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
   }
 
@@ -947,7 +1035,11 @@ export class RealtimeSyncServer {
       for (const client of this.clients) {
         try {
           client.ws.close();
-        } catch {}
+        } catch (err) {
+          appLogger.warn("realtime-ws", "WebSocket close warning on server destroy", {
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
       }
       this.clients.clear();
       this.wss.close();

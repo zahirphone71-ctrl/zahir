@@ -45,8 +45,15 @@ import {
   PrefetchedData,
   DataPrefetcher,
   MikroTikContextType,
+  ConnectionSessionContextType,
+  RouterTelemetryContextType,
+  SubscribersStateContextType,
+  NetworkStateContextType,
+  MikroTikActionsContextType,
+  RouterIdentitySummary,
   PingStabilizerSnapshot,
   PingStabilizerMode,
+  QosRulePreview,
   defaultTemplate,
   DEFAULT_SCHEDULED_TASKS,
   safeSet
@@ -54,11 +61,16 @@ import {
 import { useSubscriberActions } from './useSubscriberActions';
 import { useNetworkPortalActions } from './useNetworkPortalActions';
 
-export type { PrefetchedData, DataPrefetcher, PingStabilizerSnapshot, PingStabilizerMode };
+export type { PrefetchedData, DataPrefetcher, PingStabilizerSnapshot, PingStabilizerMode, QosRulePreview };
 export { DEFAULT_SCHEDULED_TASKS };
 
 
 const MikroTikContext = createContext<MikroTikContextType | undefined>(undefined);
+const ConnectionSessionContext = createContext<ConnectionSessionContextType | undefined>(undefined);
+const RouterTelemetryContext = createContext<RouterTelemetryContextType | undefined>(undefined);
+const SubscribersStateContext = createContext<SubscribersStateContextType | undefined>(undefined);
+const NetworkStateContext = createContext<NetworkStateContextType | undefined>(undefined);
+const MikroTikActionsContext = createContext<MikroTikActionsContextType | undefined>(undefined);
 
 export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const initialToken = safeStorage.getItem('zcontrol_active_token');
@@ -67,110 +79,38 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const connectTimeRef = useRef<number>(0);
   const authFailureCountRef = useRef<number>(0);
 
-  // Dedicated MikroTik Web Worker for batch processing & payload offloading
-  const mikrotikWorkerRef = useRef<Worker | null>(null);
-  const workerCallbacksRef = useRef<Map<string, { resolve: (val: any) => void; reject: (err: any) => void }>>(new Map());
 
-  useEffect(() => {
-    try {
-      mikrotikWorkerRef.current = new Worker(
-        new URL('../workers/mikrotik.worker.ts', import.meta.url),
-        { type: 'module' }
-      );
-
-      mikrotikWorkerRef.current.onmessage = (e: MessageEvent) => {
-        const { id, type, success, result, error, payload } = e.data || {};
-
-        if (type === 'BACKGROUND_SYNC_UPDATE') {
-          const bgData = payload || result;
-          if (bgData) {
-            if (Array.isArray(bgData.logs) && bgData.logs.length > 0) {
-              safeSet(setSystemLogs, bgData.logs);
-            }
-            if (Array.isArray(bgData.interfaces) && bgData.interfaces.length > 0) {
-              safeSet(setInterfaces, bgData.interfaces);
-            }
-            if (Array.isArray(bgData.interfaceNames) && bgData.interfaceNames.length > 0) {
-              safeSet(setInterfaceNames, bgData.interfaceNames);
-            }
-            setBgSyncEngineState((prev) => ({
-              ...prev,
-              status: 'idle',
-              lastSyncTimestamp: Date.now(),
-              syncCount: prev.syncCount + 1,
-              error: undefined
-            }));
-          }
-          return;
-        }
-
-        if (type === 'BACKGROUND_SYNC_ERROR') {
-          setBgSyncEngineState((prev) => ({
-            ...prev,
-            status: 'error',
-            error: payload?.error || 'Background sync error'
-          }));
-          return;
-        }
-
-        if (id) {
-          const cb = workerCallbacksRef.current.get(id);
-          if (cb) {
-            workerCallbacksRef.current.delete(id);
-            if (success) cb.resolve(result);
-            else cb.reject(new Error(error));
-          }
-        }
-      };
-    } catch (e) {
-      console.warn('MikroTik Worker initialization fallback:', e);
-    }
-
-    return () => {
-      if (mikrotikWorkerRef.current) {
-        mikrotikWorkerRef.current.terminate();
-        mikrotikWorkerRef.current = null;
-      }
-      workerCallbacksRef.current.clear();
-    };
-  }, []);
 
   const runWorkerTask = useCallback((type: string, payload: any): Promise<any> => {
     return new Promise((resolve, reject) => {
-      if (!mikrotikWorkerRef.current) {
-        try {
-          if (type === 'CHUNK_BATCH') {
-            const { items, chunkSize = 50 } = payload;
-            const chunks: any[][] = [];
-            for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize));
-            resolve(chunks);
-            return;
-          }
-          if (type === 'PREPARE_BATCH_PAYLOAD') {
-            const { ids, action, value, system, payload: directPayload } = payload;
-            const effectivePayload = directPayload !== undefined ? directPayload : value;
-            const batches: any[] = [];
-            for (let i = 0; i < ids.length; i += 100) {
-              batches.push({
-                system,
-                action,
-                ids: ids.slice(i, i + 100),
-                value: effectivePayload,
-                payload: effectivePayload
-              });
-            }
-            resolve(batches);
-            return;
-          }
-          resolve(payload.items || []);
-        } catch (err) {
-          reject(err);
+      try {
+        if (type === 'CHUNK_BATCH') {
+          const { items, chunkSize = 50 } = payload;
+          const chunks: any[][] = [];
+          for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize));
+          resolve(chunks);
+          return;
         }
-        return;
+        if (type === 'PREPARE_BATCH_PAYLOAD') {
+          const { ids, action, value, system, payload: directPayload } = payload;
+          const effectivePayload = directPayload !== undefined ? directPayload : value;
+          const batches: any[] = [];
+          for (let i = 0; i < ids.length; i += 100) {
+            batches.push({
+              system,
+              action,
+              ids: ids.slice(i, i + 100),
+              value: effectivePayload,
+              payload: effectivePayload
+            });
+          }
+          resolve(batches);
+          return;
+        }
+        resolve(payload.items || []);
+      } catch (err) {
+        reject(err);
       }
-      const id = Math.random().toString(36).substring(2, 9);
-      workerCallbacksRef.current.set(id, { resolve, reject });
-      mikrotikWorkerRef.current.postMessage({ id, type, payload });
     });
   }, []);
 
@@ -198,7 +138,41 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
   const [interfaceNames, setInterfaceNames] = useState<string[]>([]);
 
-  const [router, setRouter] = useState<RouterConnection | null>(null);
+  const [router, setRouter] = useState<RouterConnection | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const isSessionAuth = safeSession.getItem('zctrl_session_authenticated') === 'true';
+    const hasExplicitLogout = safeStorage.getItem('zctrl_explicit_logout') === 'true';
+    if (!isSessionAuth || hasExplicitLogout) return null;
+    try {
+      const cachedMeta = safeSession.getItem('zctrl_session_router_meta');
+      if (cachedMeta) {
+        const parsed = JSON.parse(cachedMeta);
+        if (parsed && typeof parsed === 'object' && parsed.host) {
+          delete parsed.password;
+          return parsed as RouterConnection;
+        }
+      }
+    } catch (err) {
+      console.warn('[MikroTikContext] Cached router metadata parse warning:', err);
+    }
+    return {
+      id: 'r-session',
+      name: '',
+      host: '',
+      port: 8728,
+      username: 'admin',
+      useSsl: false,
+      version: 'v7',
+      boardName: 'RouterBOARD',
+      uptime: '',
+      cpuLoad: 0,
+      freeMemory: 0,
+      totalMemory: 0,
+      pingMs: 0,
+      hasInternet: true,
+      connectedAt: new Date().toISOString()
+    };
+  });
   const [userRole, setUserRole] = useState<OperatorRole>('admin');
   const [operatorName, setOperatorName] = useState<string>('admin');
   const [tlsFingerprint, setTlsFingerprint] = useState<string | null>(null);
@@ -206,14 +180,33 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return Boolean(
       typeof window !== 'undefined' &&
       safeSession.getItem('zctrl_session_authenticated') === 'true' &&
-      safeStorage.getItem('zcontrol_active_token') &&
       safeStorage.getItem('zctrl_explicit_logout') !== 'true'
+    );
+  });
+  const [isRestoringSession, setIsRestoringSession] = useState<boolean>(() => {
+    return Boolean(
+      typeof window !== 'undefined' &&
+      safeSession.getItem('zctrl_session_authenticated') === 'true' &&
+      safeStorage.getItem('zctrl_explicit_logout') !== 'true' &&
+      !safeStorage.getItem('zcontrol_active_token')
     );
   });
   const isConnectedRef = useRef<boolean>(isConnected);
   useEffect(() => {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
+
+  useEffect(() => {
+    if (router && isConnected) {
+      try {
+        const safeMeta = { ...router };
+        delete safeMeta.password;
+        safeSession.setItem('zctrl_session_router_meta', JSON.stringify(safeMeta));
+      } catch (err) {
+        logger.warn('Failed caching session router meta: ' + String(err), 'MikroTikContext');
+      }
+    }
+  }, [router, isConnected]);
 
   // Pillar 2: Silent Exponential Backoff Reconnection Architecture
   const isContextMountedRef = useRef<boolean>(true);
@@ -230,7 +223,8 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!isContextMountedRef.current) return;
     if (safeStorage.getItem('zctrl_explicit_logout') === 'true') return;
     const activeToken = tokenRef.current || token || safeStorage.getItem('zcontrol_active_token');
-    if (!activeToken) return;
+    const isSessionAuth = safeSession.getItem('zctrl_session_authenticated') === 'true';
+    if (!activeToken && !isSessionAuth) return;
 
     if (silentReconnectTimerRef.current) {
       clearTimeout(silentReconnectTimerRef.current);
@@ -251,12 +245,21 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (!isContextMountedRef.current) return;
       try {
         const res = await fetch('/api/mikrotik/session', {
-          headers: { 'X-Router-Token': activeToken }
+          credentials: 'same-origin',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            ...(activeToken ? { 'X-Router-Token': activeToken } : {})
+          }
         });
         if (!isContextMountedRef.current) return;
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.connected) {
+            const restoredToken = data.token || activeToken || null;
+            if (restoredToken) {
+              setToken(restoredToken);
+              safeStorage.setItem('zctrl_router_token', restoredToken);
+            }
             reconnectAttemptsRef.current = 0;
             setReconnectAttempts(0);
             isSilentReconnectingRef.current = false;
@@ -270,7 +273,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (data.tlsFingerprint !== undefined || data.router?.tlsFingerprint !== undefined) {
               setTlsFingerprint(data.tlsFingerprint ?? data.router?.tlsFingerprint ?? null);
             }
-            syncNowRef.current(true).catch(() => {});
+            syncNowRef.current(false).catch(() => {});
             return;
           }
         }
@@ -281,21 +284,145 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
     }, backoffMs);
-  }, [token]);
+  }, [token, setToken]);
+
+  const electronRestorePromiseRef = useRef<Promise<boolean> | null>(null);
+  const tryRestoreElectronBackendSession = useCallback(async (): Promise<boolean> => {
+    if (typeof window === 'undefined' || !window.zctrlDesktopSession?.restoreBackendSession) {
+      return false;
+    }
+    if (safeStorage.getItem('zctrl_explicit_logout') === 'true') {
+      return false;
+    }
+    if (electronRestorePromiseRef.current) {
+      return electronRestorePromiseRef.current;
+    }
+    const run = (async () => {
+      try {
+        const res = await window.zctrlDesktopSession!.restoreBackendSession();
+        if (!isContextMountedRef.current) return false;
+        if (res && res.success && res.token && res.router) {
+          tokenRef.current = res.token;
+          safeStorage.setItem('zcontrol_active_token', res.token);
+          safeStorage.setItem('zctrl_router_token', res.token);
+          setToken(res.token);
+          safeSession.setItem('zctrl_session_authenticated', 'true');
+          setRouter((prev) => ({
+            ...(prev || {}),
+            ...res.router!,
+            connectedAt: prev?.connectedAt || res.router!.connectedAt || new Date().toISOString()
+          } as RouterConnection));
+          if (res.role) setUserRole(res.role);
+          if (res.operatorName) setOperatorName(res.operatorName);
+          if (res.tlsFingerprint !== undefined) setTlsFingerprint(res.tlsFingerprint);
+          isConnectedRef.current = true;
+          setIsConnected(true);
+          reconnectAttemptsRef.current = 0;
+          setReconnectAttempts(0);
+          isSilentReconnectingRef.current = false;
+          setIsSilentReconnecting(false);
+          authFailureCountRef.current = 0;
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      } finally {
+        electronRestorePromiseRef.current = null;
+      }
+    })();
+    electronRestorePromiseRef.current = run;
+    return run;
+  }, [setToken]);
 
   const fetchWithToken = useCallback(async (input: RequestInfo | URL, init?: RequestInit) => {
     const activeToken = tokenRef.current || token || safeStorage.getItem('zcontrol_active_token');
-    const headers = {
-      ...(init?.headers || {}),
+    const headers: Record<string, string> = {
+      'X-Requested-With': 'XMLHttpRequest',
+      ...((init?.headers as Record<string, string>) || {}),
       ...(activeToken ? { 'X-Router-Token': activeToken } : {})
     };
     try {
-      const res = await fetch(input, { ...init, headers });
-      if (res.ok && reconnectAttemptsRef.current > 0) {
-        reconnectAttemptsRef.current = 0;
-        setReconnectAttempts(0);
-        isSilentReconnectingRef.current = false;
-        setIsSilentReconnecting(false);
+      const res = await fetch(input, {
+        ...init,
+        credentials: init?.credentials ?? 'same-origin',
+        headers
+      });
+      if (res.ok) {
+        authFailureCountRef.current = 0;
+        if (reconnectAttemptsRef.current > 0) {
+          reconnectAttemptsRef.current = 0;
+          setReconnectAttempts(0);
+          isSilentReconnectingRef.current = false;
+          setIsSilentReconnecting(false);
+        }
+        return res;
+      }
+      if (res.status === 503) {
+        try {
+          const payload = await res.clone().json();
+          if (payload?.reconnecting && isConnectedRef.current && safeStorage.getItem('zctrl_explicit_logout') !== 'true') {
+            if (!isSilentReconnectingRef.current) {
+              triggerSilentReconnect();
+            }
+          }
+        } catch (err) {
+          logger.warn('Failed parsing 503 payload: ' + String(err), 'fetchWithToken');
+        }
+        return res;
+      }
+      if (res.status === 401) {
+        try {
+          const payload = await res.clone().json();
+          if (payload?.reconnecting && isConnectedRef.current && safeStorage.getItem('zctrl_explicit_logout') !== 'true') {
+            if (!isSilentReconnectingRef.current) {
+              triggerSilentReconnect();
+            }
+            return res;
+          }
+          if (payload?.code === 'SESSION_INVALID' || payload?.sessionExpired === true) {
+            const restored = await tryRestoreElectronBackendSession();
+            if (restored) {
+              const refreshedToken = tokenRef.current || safeStorage.getItem('zcontrol_active_token');
+              return fetch(input, {
+                ...init,
+                credentials: init?.credentials ?? 'same-origin',
+                headers: {
+                  ...headers,
+                  ...(refreshedToken ? { 'X-Router-Token': refreshedToken } : {})
+                }
+              });
+            }
+            if (safeStorage.getItem('zctrl_explicit_logout') !== 'true' && isConnectedRef.current) {
+              // Confirm via /api/mikrotik/session before ever logging out
+              try {
+                const sessRes = await fetch('/api/mikrotik/session', {
+                  credentials: 'same-origin',
+                  headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    ...(activeToken ? { 'X-Router-Token': activeToken } : {})
+                  }
+                });
+                const sessData = await sessRes.json().catch(() => null);
+                if (sessRes.ok && sessData && (sessData.connected || sessData.reconnecting)) {
+                  if (sessData.reconnecting && !isSilentReconnectingRef.current) {
+                    triggerSilentReconnect();
+                  }
+                  return res;
+                }
+              } catch {
+                return res;
+              }
+              safeSession.removeItem('zctrl_session_authenticated');
+              safeSession.removeItem('zctrl_session_router_meta');
+              setToken(null);
+              isConnectedRef.current = false;
+              setIsConnected(false);
+            }
+          }
+        } catch (err) {
+          logger.warn('Failed handling 401 session check: ' + String(err), 'fetchWithToken');
+        }
       }
       return res;
     } catch (err: any) {
@@ -308,7 +435,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       throw err;
     }
-  }, [token, triggerSilentReconnect]);
+  }, [token, setToken, triggerSilentReconnect, tryRestoreElectronBackendSession]);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [autoSync, setAutoSync] = useState<boolean>(() => {
@@ -351,7 +478,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled })
       });
-    } catch {}
+    } catch (err) {
+      logger.warn('Failed updating ecoMode on server: ' + String(err), 'MikroTikContext');
+    }
   }, [syncFrequency, setSyncFrequency, fetchWithToken]);
 
   const handleSetAutoSync = useCallback((val: boolean) => {
@@ -388,34 +517,34 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (realtimeFrequency !== 'auto') {
       return Math.max(2, Number(realtimeFrequency));
     }
-    let baseSec = 6;
+    let baseSec = 10;
     if (currentActiveTab === 'traffic') {
-      baseSec = 4;
-    } else if (currentActiveTab === 'active_sessions') {
-      baseSec = 5;
-    } else if (currentActiveTab === 'ppp') {
-      baseSec = 5;
-    } else if (currentActiveTab === 'dashboard') {
-      baseSec = 5;
-    } else if (currentActiveTab === 'hotspot_users') {
-      baseSec = 8;
-    } else if (currentActiveTab === 'userman') {
-      baseSec = 8;
-    } else if (currentActiveTab === 'queues') {
       baseSec = 6;
-    } else if (currentActiveTab === 'dhcp') {
+    } else if (currentActiveTab === 'active_sessions') {
       baseSec = 8;
-    } else if (['firewall', 'logs'].includes(currentActiveTab)) {
+    } else if (currentActiveTab === 'ppp') {
+      baseSec = 8;
+    } else if (currentActiveTab === 'dashboard') {
       baseSec = 10;
-    } else {
+    } else if (currentActiveTab === 'hotspot_users') {
+      baseSec = 15;
+    } else if (currentActiveTab === 'userman') {
+      baseSec = 15;
+    } else if (currentActiveTab === 'queues') {
       baseSec = 12;
+    } else if (currentActiveTab === 'dhcp') {
+      baseSec = 12;
+    } else if (['firewall', 'logs'].includes(currentActiveTab)) {
+      baseSec = 15;
+    } else {
+      baseSec = 25;
     }
 
     if (isUserIdle) {
-      baseSec = Math.min(25, Math.round(baseSec * 1.6));
+      baseSec = Math.min(40, Math.round(baseSec * 2));
     }
     if (thermalShieldActive) {
-      baseSec = Math.max(baseSec, 6);
+      baseSec = Math.max(baseSec, currentActiveTab === 'traffic' ? 8 : 10);
     }
     if (pingStabilizer?.recommendedWsIntervalMs) {
       const stabSec = Math.round(pingStabilizer.recommendedWsIntervalMs / 1000);
@@ -464,7 +593,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     // Abort any in-flight tab fetch before starting a new tab's fetch
     if (tabFetchAbortRef.current) {
-      try { tabFetchAbortRef.current.abort(); } catch {}
+      try {
+        tabFetchAbortRef.current.abort();
+      } catch (err) {
+        logger.warn('Failed aborting previous tab fetch: ' + String(err), 'MikroTikContext');
+      }
       tabFetchAbortRef.current = null;
     }
 
@@ -484,8 +617,8 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // 1. Gentle targeted live data sync for the selected tab (uses server cache unless stale)
       if (tab === 'active_sessions') {
         Promise.all([
-          fetchWithToken('/api/mikrotik/data/sync/hotspot', { signal }).then(r => r.json()).catch(() => null),
-          fetchWithToken('/api/mikrotik/data/sync/ppp', { signal }).then(r => r.json()).catch(() => null)
+          fetchWithToken('/api/mikrotik/data/sync/hotspot?activeOnly=true', { signal }).then(r => r.json()).catch(() => null),
+          fetchWithToken('/api/mikrotik/data/sync/ppp?activeOnly=true', { signal }).then(r => r.json()).catch(() => null)
         ]).then(([hsJson, pppJson]) => {
           if (signal.aborted) return;
           if (hsJson && hsJson.success && hsJson.data) {
@@ -497,12 +630,14 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           }
         }).catch(() => {});
       } else if (['hotspot_users', 'generator', 'ip_binding'].includes(tab)) {
-        fetchWithToken('/api/mikrotik/data/sync/hotspot', { signal })
+        const hashQ = lastUserHashRef.current ? `?userHash=${encodeURIComponent(lastUserHashRef.current)}` : '';
+        fetchWithToken(`/api/mikrotik/data/sync/hotspot${hashQ}`, { signal })
           .then(r => r.json())
           .then(j => {
             if (signal.aborted) return;
             if (j.success && j.data) {
-              if (Array.isArray(j.data.hotspotUsers)) {
+              if (j.data.userHash) lastUserHashRef.current = j.data.userHash;
+              if (!j.data.notModifiedUsers && Array.isArray(j.data.hotspotUsers)) {
                 safeSet(setUsers, j.data.hotspotUsers);
                 saveGlobalCache('hotspot_users', j.data.hotspotUsers, router?.host);
               }
@@ -519,12 +654,14 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           })
           .catch(() => {});
       } else if (tab === 'ppp') {
-        fetchWithToken('/api/mikrotik/data/sync/ppp', { signal })
+        const hashQ = lastSecretHashRef.current ? `?secretHash=${encodeURIComponent(lastSecretHashRef.current)}` : '';
+        fetchWithToken(`/api/mikrotik/data/sync/ppp${hashQ}`, { signal })
           .then(r => r.json())
           .then(j => {
             if (signal.aborted) return;
             if (j.success && j.data) {
-              if (Array.isArray(j.data.secrets)) {
+              if (j.data.secretHash) lastSecretHashRef.current = j.data.secretHash;
+              if (!j.data.notModifiedSecrets && Array.isArray(j.data.secrets)) {
                 safeSet(setPppSecrets, j.data.secrets);
                 saveGlobalCache('ppp_secrets', j.data.secrets, router?.host);
               }
@@ -557,7 +694,8 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           })
           .catch(() => {});
       } else if (['queues', 'dhcp', 'firewall', 'logs'].includes(tab)) {
-        fetchWithToken('/api/mikrotik/data/sync/network', { signal })
+        const netUrl = `/api/mikrotik/data/sync/network${tab === 'logs' ? '?includeLogs=true' : ''}`;
+        fetchWithToken(netUrl, { signal })
           .then(r => r.json())
           .then(j => {
             if (signal.aborted) return;
@@ -691,75 +829,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => { isMounted = false; };
   }, []);
 
-  // Service Worker Based Background Telemetry Sync Module
-  useEffect(() => {
-    // If real-time websocket is connected or router disconnected, avoid running duplicate background SW polling
-    if (!isConnected || !token || isRealtimeWsConnected || typeof window === 'undefined' || !('serviceWorker' in navigator)) {
-      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'STOP_BACKGROUND_TELEMETRY' });
-      }
-      return;
-    }
 
-    let isMounted = true;
-    let swMessageHandler: ((event: MessageEvent) => void) | null = null;
-
-    const registerTelemetrySW = async () => {
-      try {
-        const registration = await navigator.serviceWorker.register('/telemetry-sw.js', { scope: '/' });
-        if (!isMounted) return;
-
-        const activeWorker = registration.active || registration.waiting || registration.installing;
-        if (activeWorker) {
-          activeWorker.postMessage({
-            type: 'START_BACKGROUND_TELEMETRY',
-            payload: {
-              baseUrl: window.location.origin,
-              token,
-              intervalMs: Math.max(30000, (syncFrequency || 30) * 1000)
-            }
-          });
-        }
-
-        swMessageHandler = (event: MessageEvent) => {
-          if (!isMounted) return;
-          const { type, data } = event.data || {};
-          if (type === 'BACKGROUND_TELEMETRY_UPDATE' && data) {
-            if (data.interfaces && Array.isArray(data.interfaces)) {
-              safeSet(setInterfaces, data.interfaces);
-            }
-            setRouter(prev => prev ? {
-              ...prev,
-              uptime: data.uptime ?? prev.uptime,
-              cpuLoad: data.cpuLoad ?? prev.cpuLoad,
-              cpuTemperature: data.cpuTemperature ?? prev.cpuTemperature,
-              boardTemperature: data.boardTemperature ?? prev.boardTemperature,
-              freeMemory: data.freeMemory ?? prev.freeMemory,
-              totalMemory: data.totalMemory ?? prev.totalMemory,
-              pingMs: data.pingMs ?? prev.pingMs,
-              hasInternet: data.hasInternet ?? prev.hasInternet
-            } : null);
-          }
-        };
-
-        navigator.serviceWorker.addEventListener('message', swMessageHandler);
-      } catch (err) {
-        console.warn('Telemetry Service Worker registration skipped:', err);
-      }
-    };
-
-    registerTelemetrySW();
-
-    return () => {
-      isMounted = false;
-      if (swMessageHandler && 'serviceWorker' in navigator) {
-        navigator.serviceWorker.removeEventListener('message', swMessageHandler);
-      }
-      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'STOP_BACKGROUND_TELEMETRY' });
-      }
-    };
-  }, [isConnected, token, isRealtimeWsConnected, syncFrequency, safeSet]);
 
   // Wireless, Connected Antennas & Hotspot Portal
   const [wirelessInterfaces, setWirelessInterfaces] = useState<WirelessInterface[]>([]);
@@ -783,7 +853,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
       }
-    } catch {}
+    } catch (err) {
+      logger.warn('Failed loading cached scheduled tasks: ' + String(err), 'MikroTikContext');
+    }
     return [];
   });
   const [isLoadingSchedulers, setIsLoadingSchedulers] = useState<boolean>(false);
@@ -809,76 +881,100 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
-  // استعادة الجلسة النشطة تلقائياً فقط عند تحديث الصفحة ولم يتم تسجيل الخروج يدوياً
+  // استعادة الجلسة النشطة تلقائياً فقط عند تحديث الصفحة (F5) ولم يتم تسجيل الخروج يدوياً
   useEffect(() => {
     let isMounted = true;
     const verifyAndRestoreSession = async () => {
       // منع الدخول التلقائي عند بدء التشغيل الجديد للتطبيق
       if (safeSession.getItem('zctrl_session_authenticated') !== 'true') {
+        if (isMounted) setIsRestoringSession(false);
         return;
       }
       // إذا كان المستخدم قد سجل الخروج صراحة، لا تتم استعادة الجلسة تلقائياً نهائياً
       if (safeStorage.getItem('zctrl_explicit_logout') === 'true') {
+        if (isMounted) setIsRestoringSession(false);
         return;
       }
+
+      if (isMounted) setIsRestoringSession(true);
       const activeToken = tokenRef.current || token || safeStorage.getItem('zcontrol_active_token');
-      if (!activeToken) return;
 
       try {
         const res = await fetch('/api/mikrotik/session', {
-          headers: { 'X-Router-Token': activeToken }
+          credentials: 'same-origin',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            ...(activeToken ? { 'X-Router-Token': activeToken } : {})
+          }
         });
+        if (!isMounted) return;
         if (res.ok) {
           const data = await res.json();
-          if (isMounted && data.success && data.connected && data.router) {
-            tokenRef.current = activeToken;
-            setTokenState(activeToken);
-            setRouter({
-              id: `r-${Date.now()}`,
-              name: data.router.boardName || 'MikroTik RouterOS',
-              host: data.router.host || '192.168.88.1',
-              port: data.router.port || 8728,
-              username: data.router.username || 'admin',
-              useSsl: Boolean(data.router.useSsl),
-              version: data.router.version || '',
-              majorVersion: data.router.majorVersion || 7,
-              boardName: data.router.boardName || 'RouterBOARD',
-              uptime: '',
-              cpuLoad: 0,
-              freeMemory: 0,
-              totalMemory: 0,
-              pingMs: 15,
-              connectedAt: new Date().toISOString()
-            });
+          if (data.success && (data.connected || data.reconnecting) && data.router) {
+            const restoredToken = data.token || activeToken || null;
+            if (restoredToken) {
+              setToken(restoredToken);
+              safeStorage.setItem('zctrl_router_token', restoredToken);
+            }
+            setRouter((prev) => ({
+              id: prev?.id || `r-${Date.now()}`,
+              name: data.router.name || data.router.boardName || prev?.name || 'MikroTik RouterOS',
+              host: data.router.host || prev?.host || '',
+              port: data.router.port || prev?.port || 8728,
+              username: data.router.username || prev?.username || 'admin',
+              useSsl: Boolean(data.router.useSsl ?? prev?.useSsl),
+              version: data.router.version || prev?.version || '',
+              majorVersion: data.router.majorVersion || prev?.majorVersion || 7,
+              boardName: data.router.boardName || prev?.boardName || 'RouterBOARD',
+              uptime: prev?.uptime || '',
+              cpuLoad: prev?.cpuLoad ?? 0,
+              cpuTemperature: prev?.cpuTemperature,
+              boardTemperature: prev?.boardTemperature,
+              freeMemory: prev?.freeMemory ?? 0,
+              totalMemory: prev?.totalMemory ?? 0,
+              pingMs: prev?.pingMs ?? 0,
+              hasInternet: prev?.hasInternet ?? true,
+              gateway: prev?.gateway,
+              wanIp: prev?.wanIp,
+              connectedAt: prev?.connectedAt || new Date().toISOString()
+            }));
             setIsConnected(true);
+            isConnectedRef.current = true;
             setUserRole((data.role as OperatorRole) || 'admin');
             setOperatorName(data.operatorName || data.router.username || 'admin');
             setTlsFingerprint(data.tlsFingerprint ?? data.router.tlsFingerprint ?? null);
             connectTimeRef.current = Date.now();
-            setTimeout(() => {
-              syncNowRef.current(true).catch(() => {});
-            }, 10);
-          } else if (isMounted && data.router) {
-            // الراوتر يعيد الاتصال حالياً - نحافظ على الجلسة نشطة لمنع دورات تسجيل الخروج والدخول
-            setRouter(prev => prev || {
-              id: `r-${Date.now()}`,
-              name: data.router.boardName || 'MikroTik RouterOS',
-              host: data.router.host || '192.168.88.1',
-              port: data.router.port || 8728,
-              username: data.router.username || 'admin',
-              useSsl: false,
-              version: '',
-              boardName: 'RouterBOARD',
-              uptime: '',
-              cpuLoad: 0,
-              freeMemory: 0,
-              totalMemory: 0,
-              pingMs: 15,
-              connectedAt: new Date().toISOString()
-            });
+            if (data.connected) {
+              setTimeout(() => {
+                syncNowRef.current(false).catch(() => {});
+              }, 10);
+            } else if (data.reconnecting) {
+              triggerSilentReconnect();
+            }
+            return;
           }
         }
-      } catch {}
+        // Attempt RAM-only Electron backend-respawn recovery before dropping session
+        const recovered = await tryRestoreElectronBackendSession();
+        if (!isMounted) return;
+        if (recovered) {
+          setTimeout(() => {
+            syncNowRef.current(false).catch(() => {});
+          }, 50);
+          return;
+        }
+        // لم تعد الجلسة صالحة على الخادم (مثل إعادة تشغيل الخادم في المتصفح العادي)
+        safeSession.removeItem('zctrl_session_authenticated');
+        safeSession.removeItem('zctrl_session_router_meta');
+        setToken(null);
+        setRouter(null);
+        setIsConnected(false);
+        isConnectedRef.current = false;
+      } catch {
+        // عند خطأ شبكة مؤقت، نحافظ على إمكانية إعادة المحاولة دون طرد المستخدم
+      } finally {
+        if (isMounted) setIsRestoringSession(false);
+      }
     };
 
     verifyAndRestoreSession();
@@ -886,6 +982,25 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isMounted = false;
     };
   }, []);
+
+  // Electron Desktop: Listen for backend child process respawn and seamlessly re-establish router session
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.zctrlDesktopSession?.onBackendRespawned) {
+      return;
+    }
+    const unsubscribe = window.zctrlDesktopSession.onBackendRespawned(async () => {
+      if (!isContextMountedRef.current) return;
+      if (safeStorage.getItem('zctrl_explicit_logout') === 'true') return;
+      if (safeSession.getItem('zctrl_session_authenticated') !== 'true') return;
+      const recovered = await tryRestoreElectronBackendSession();
+      if (recovered && isContextMountedRef.current) {
+        setTimeout(() => {
+          syncNowRef.current(false).catch(() => {});
+        }, 100);
+      }
+    });
+    return unsubscribe;
+  }, [tryRestoreElectronBackendSession]);
 
   // Toast with Action Support & Audio alerts
   const [toast, setToast] = useState<{
@@ -913,11 +1028,19 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         silentReconnectTimerRef.current = null;
       }
       if (tabFetchAbortRef.current) {
-        try { tabFetchAbortRef.current.abort(); } catch {}
+        try {
+          tabFetchAbortRef.current.abort();
+        } catch (err) {
+          logger.warn('Cleanup tabFetchAbort warning: ' + String(err), 'MikroTikContext');
+        }
         tabFetchAbortRef.current = null;
       }
       if (streamAbortRef.current) {
-        try { streamAbortRef.current.abort(); } catch {}
+        try {
+          streamAbortRef.current.abort();
+        } catch (err) {
+          logger.warn('Cleanup streamAbort warning: ' + String(err), 'MikroTikContext');
+        }
         streamAbortRef.current = null;
       }
     };
@@ -1005,7 +1128,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           });
         }
       }
-    } catch {}
+    } catch (err) {
+      logger.warn('Failed parsing connection profiles: ' + String(err), 'MikroTikContext');
+    }
     return [];
   });
 
@@ -1091,6 +1216,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const syncInProgressRef = useRef(false);
   const lastUserHashRef = useRef<string>('');
   const lastSecretHashRef = useRef<string>('');
+  const lastWirelessPortalSyncRef = useRef<number>(0);
 
 
   const syncNow = useCallback(async (force: boolean = false) => {
@@ -1108,14 +1234,18 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (force) setIsSyncingSystem(true);
         try {
           const res = await fetchWithToken(`/api/mikrotik/data/sync/system${force ? '?force=true' : ''}`);
-          if (res.status === 401) {
-            authFailureCountRef.current += 1;
-            if (authFailureCountRef.current === 2) {
-              showToast('انقطعت جلسة الخادم مؤقتاً — جاري محاولة استعادة الاتصال تلقائياً أو يمكنك إعادة تسجيل الدخول', 'warning');
-              if (!isSilentReconnectingRef.current) {
+          if (res.status === 503) {
+            try {
+              const payload = await res.json();
+              if (payload?.reconnecting && !isSilentReconnectingRef.current) {
                 triggerSilentReconnect();
               }
+            } catch (err) {
+              logger.warn('Failed parsing 503 syncSystem payload: ' + String(err), 'syncNow');
             }
+            return;
+          }
+          if (res.status === 401) {
             return;
           }
           authFailureCountRef.current = 0;
@@ -1132,7 +1262,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 const base: RouterConnection = prev || {
                   id: `r-${Date.now()}`,
                   name: d.identity || 'MikroTik RouterOS',
-                  host: router?.host || '192.168.88.1',
+                  host: router?.host || '',
                   port: router?.port || 8728,
                   username: router?.username || 'admin',
                   useSsl: false,
@@ -1142,7 +1272,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   cpuLoad: d.cpuLoad ?? 0,
                   freeMemory: d.freeMemory ?? 0,
                   totalMemory: d.totalMemory ?? 0,
-                  pingMs: d.pingMs ?? 15,
+                  pingMs: d.pingMs ?? 0,
                   hasInternet: d.hasInternet ?? true,
                   gateway: d.gateway || '',
                   wanIp: d.wanIp || '',
@@ -1162,7 +1292,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   hasInternet: d.hasInternet ?? base.hasInternet,
                   gateway: d.gateway ?? base.gateway,
                   wanIp: d.wanIp ?? base.wanIp,
-                  pingMs: d.pingMs ?? base.pingMs ?? 15,
+                  pingMs: d.pingMs ?? base.pingMs ?? 0,
                   ecoMode: ecoMode
                 };
                 if (
@@ -1212,7 +1342,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               if (d.userHash) {
                 lastUserHashRef.current = d.userHash;
               }
-              if (Array.isArray(d.hotspotUsers)) {
+              if (!d.notModifiedUsers && Array.isArray(d.hotspotUsers)) {
                 safeSet(setUsers, d.hotspotUsers);
                 saveGlobalCache('hotspot_users', d.hotspotUsers, router?.host);
               }
@@ -1257,7 +1387,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               if (d.secretHash) {
                 lastSecretHashRef.current = d.secretHash;
               }
-              if (Array.isArray(d.secrets)) {
+              if (!d.notModifiedSecrets && Array.isArray(d.secrets)) {
                 safeSet(setPppSecrets, d.secrets);
                 saveGlobalCache('ppp_secrets', d.secrets, router?.host);
               }
@@ -1278,8 +1408,12 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const syncNetwork = async () => {
         if (force) setIsSyncingNetwork(true);
         try {
-          const res = await fetchWithToken(`/api/mikrotik/data/sync/network${force ? '?force=true' : ''}`);
-          if (res.status === 401) return;
+          const params: string[] = [];
+          if (force) params.push('force=true');
+          if (currentActiveTabRef.current === 'logs') params.push('includeLogs=true');
+          const qs = params.length > 0 ? `?${params.join('&')}` : '';
+          const res = await fetchWithToken(`/api/mikrotik/data/sync/network${qs}`);
+          if (res.status === 401 || res.status === 503) return;
           if (res.ok) {
             const json = await res.json();
             if (json.success && json.data) {
@@ -1287,7 +1421,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               safeSet(setSimpleQueues, d.queues || []);
               safeSet(setDhcpLeases, d.leases || []);
               safeSet(setFirewallRules, d.firewall || []);
-              safeSet(setSystemLogs, d.logs || []);
+              if (Array.isArray(d.logs)) {
+                safeSet(setSystemLogs, d.logs);
+              }
             }
           }
         } catch {
@@ -1349,7 +1485,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Try single-flight composite sync endpoint first for instant full-router state
       let compositeSyncDone = false;
       try {
-        const allRes = await fetchWithToken(`/api/mikrotik/data/sync/all${force ? '?force=true' : ''}`);
+        const allParams: string[] = [];
+        if (force) allParams.push('force=true');
+        if (currentActiveTabRef.current === 'logs') allParams.push('includeLogs=true');
+        const allQs = allParams.length > 0 ? `?${allParams.join('&')}` : '';
+        const allRes = await fetchWithToken(`/api/mikrotik/data/sync/all${allQs}`);
         if (allRes.ok) {
           const allJson = await allRes.json();
           if (allJson.success && allJson.data) {
@@ -1357,7 +1497,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (system) {
               lastCpuLoadRef.current = system.cpuLoad ?? 0;
               if (system.pingStabilizer) {
-                setPingStabilizer(system.pingStabilizer);
+                safeSet(setPingStabilizer, system.pingStabilizer);
               }
               if (Array.isArray(system.interfaces) && system.interfaces.length > 0) {
                 safeSet(setInterfaces, system.interfaces);
@@ -1367,7 +1507,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 const base: RouterConnection = prev || {
                   id: `r-${Date.now()}`,
                   name: system.identity || 'MikroTik RouterOS',
-                  host: router?.host || '192.168.88.1',
+                  host: router?.host || '',
                   port: router?.port || 8728,
                   username: router?.username || 'admin',
                   useSsl: false,
@@ -1377,13 +1517,13 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   cpuLoad: system.cpuLoad ?? 0,
                   freeMemory: system.freeMemory ?? 0,
                   totalMemory: system.totalMemory ?? 0,
-                  pingMs: system.pingMs ?? 15,
+                  pingMs: system.pingMs ?? 0,
                   hasInternet: system.hasInternet ?? true,
                   gateway: system.gateway || '',
                   wanIp: system.wanIp || '',
                   connectedAt: new Date().toISOString()
                 };
-                return {
+                const next: RouterConnection = {
                   ...base,
                   cpuLoad: system.cpuLoad ?? base.cpuLoad,
                   cpuTemperature: system.cpuTemperature ?? base.cpuTemperature,
@@ -1397,9 +1537,29 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   hasInternet: system.hasInternet ?? base.hasInternet,
                   gateway: system.gateway ?? base.gateway,
                   wanIp: system.wanIp ?? base.wanIp,
-                  pingMs: system.pingMs ?? base.pingMs ?? 15,
+                  pingMs: system.pingMs ?? base.pingMs ?? 0,
                   ecoMode: ecoMode
                 };
+                if (
+                  prev &&
+                  prev.cpuLoad === next.cpuLoad &&
+                  prev.cpuTemperature === next.cpuTemperature &&
+                  prev.boardTemperature === next.boardTemperature &&
+                  prev.uptime === next.uptime &&
+                  prev.freeMemory === next.freeMemory &&
+                  prev.totalMemory === next.totalMemory &&
+                  prev.version === next.version &&
+                  prev.boardName === next.boardName &&
+                  prev.name === next.name &&
+                  prev.hasInternet === next.hasInternet &&
+                  prev.gateway === next.gateway &&
+                  prev.wanIp === next.wanIp &&
+                  prev.pingMs === next.pingMs &&
+                  prev.ecoMode === next.ecoMode
+                ) {
+                  return prev;
+                }
+                return next;
               });
             }
             if (hotspot) {
@@ -1440,7 +1600,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               safeSet(setSimpleQueues, network.queues || []);
               safeSet(setDhcpLeases, network.leases || []);
               safeSet(setFirewallRules, network.firewall || []);
-              safeSet(setSystemLogs, network.logs || []);
+              if (Array.isArray(network.logs)) {
+                safeSet(setSystemLogs, network.logs);
+              }
             }
             compositeSyncDone = true;
           }
@@ -1449,22 +1611,30 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         compositeSyncDone = false;
       }
 
+      const shouldSyncWirelessPortal = force || (Date.now() - lastWirelessPortalSyncRef.current > 300000);
       if (compositeSyncDone) {
-        // Stagger non-critical wireless/portal sync by 2s so RouterOS CPU & Ping stay calm
-        setTimeout(() => {
-          if (isContextMountedRef.current && isConnectedRef.current) {
-            syncWirelessAndPortal().catch(() => {});
-          }
-        }, 2000);
+        if (shouldSyncWirelessPortal) {
+          lastWirelessPortalSyncRef.current = Date.now();
+          // Stagger non-critical wireless/portal sync by 2s so RouterOS CPU & Ping stay calm
+          setTimeout(() => {
+            if (isContextMountedRef.current && isConnectedRef.current) {
+              syncWirelessAndPortal().catch(() => {});
+            }
+          }, 2000);
+        }
       } else {
         // Fallback to domain-targeted parallel sync if composite sync endpoint was bypassed
-        await Promise.allSettled([
+        const fallbackTasks: Promise<void>[] = [
           syncSystem(),
           syncHotspot(),
           syncPPP(),
-          syncNetwork(),
-          syncWirelessAndPortal()
-        ]);
+          syncNetwork()
+        ];
+        if (shouldSyncWirelessPortal) {
+          lastWirelessPortalSyncRef.current = Date.now();
+          fallbackTasks.push(syncWirelessAndPortal());
+        }
+        await Promise.allSettled(fallbackTasks);
       }
 
       const now = Date.now();
@@ -1604,7 +1774,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       while (true) {
         if (signal?.aborted) {
-          try { await reader.cancel(); } catch {}
+          try {
+            await reader.cancel();
+          } catch (err) {
+            logger.warn('Failed cancelling stream reader: ' + String(err), 'streamSubscriberDomain');
+          }
           break;
         }
         const { done, value } = await reader.read();
@@ -1679,14 +1853,20 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 }
               }
             }
-          } catch {}
+          } catch (err) {
+            logger.warn('Failed parsing NDJSON stream line: ' + String(err), 'streamSubscriberDomain');
+          }
         }
       }
     } catch {
       // Network / AbortError handling
     } finally {
       if (reader) {
-        try { reader.releaseLock(); } catch {}
+        try {
+          reader.releaseLock();
+        } catch (err) {
+          logger.warn('Failed releasing stream reader lock: ' + String(err), 'streamSubscriberDomain');
+        }
       }
       if (!signal?.aborted) {
         setStreamStatus(prev => ({ ...prev, isStreaming: false }));
@@ -1696,7 +1876,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const streamSubscribersByTabPriority = useCallback(async (activeTab: string, force: boolean = false) => {
     if (streamAbortRef.current) {
-      try { streamAbortRef.current.abort(); } catch {}
+      try {
+        streamAbortRef.current.abort();
+      } catch (err) {
+        logger.warn('Failed aborting previous stream: ' + String(err), 'streamSubscribersByTabPriority');
+      }
     }
     const controller = new AbortController();
     streamAbortRef.current = controller;
@@ -1783,7 +1967,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (prefetchAbortRef.current) {
       try {
         prefetchAbortRef.current.abort();
-      } catch {}
+      } catch (err) {
+        logger.warn('Failed aborting prefetch: ' + String(err), 'cancelPrefetch');
+      }
       prefetchAbortRef.current = null;
     }
     setIsPrefetching(false);
@@ -1890,7 +2076,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [currentActiveTab, isHeavyPage, cancelPrefetch]);
 
-  // Scheduled background idle prefetch timer (gentle interval every 60s during idle only)
+  // Scheduled background idle prefetch timer (gentle interval every 180s during idle only when CPU is cool)
   useEffect(() => {
     if (!isConnected) {
       cancelPrefetch();
@@ -1903,16 +2089,21 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     const interval = setInterval(() => {
-      // Run ONLY when user is idle and currently on a non-heavy page
-      if (isUserIdleRef.current && !isHeavyPage(currentActiveTabRef.current)) {
+      // Run ONLY when user is idle, on a non-heavy page, and router CPU/thermals are calm
+      if (
+        isUserIdleRef.current &&
+        !isHeavyPage(currentActiveTabRef.current) &&
+        !thermalShieldActive &&
+        lastCpuLoadRef.current <= 55
+      ) {
         triggerIdlePrefetch();
       }
-    }, 60000);
+    }, 180000);
 
     return () => {
       clearInterval(interval);
     };
-  }, [isConnected, currentActiveTab, isHeavyPage, cancelPrefetch, triggerIdlePrefetch]);
+  }, [isConnected, currentActiveTab, isHeavyPage, cancelPrefetch, triggerIdlePrefetch, thermalShieldActive]);
 
   const dataPrefetcher: DataPrefetcher = useMemo(() => ({
     status: prefetcherStatus,
@@ -1930,57 +2121,32 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // ----------------------------------------------------
   const startBackgroundSync = useCallback((customIntervalMs?: number) => {
     const intervalMs = customIntervalMs || 30000;
-    if (mikrotikWorkerRef.current) {
-      mikrotikWorkerRef.current.postMessage({
-        type: 'START_BACKGROUND_SYNC',
-        payload: {
-          baseUrl: typeof window !== 'undefined' ? window.location.origin : '',
-          token: tokenRef.current || '',
-          intervalMs
-        }
-      });
-      setBgSyncEngineState((prev) => ({
-        ...prev,
-        isRunning: true,
-        status: 'syncing',
-        intervalMs
-      }));
-    }
+    setBgSyncEngineState((prev) => ({
+      ...prev,
+      isRunning: true,
+      status: 'syncing',
+      intervalMs
+    }));
   }, []);
 
   const stopBackgroundSync = useCallback(() => {
-    if (mikrotikWorkerRef.current) {
-      mikrotikWorkerRef.current.postMessage({
-        type: 'STOP_BACKGROUND_SYNC'
-      });
-      setBgSyncEngineState((prev) => ({
-        ...prev,
-        isRunning: false,
-        status: 'idle'
-      }));
-    }
+    setBgSyncEngineState((prev) => ({
+      ...prev,
+      isRunning: false,
+      status: 'idle'
+    }));
   }, []);
 
   const triggerBackgroundSyncNow = useCallback(async () => {
     setBgSyncEngineState((prev) => ({ ...prev, status: 'syncing' }));
     try {
-      const result = await runWorkerTask('FETCH_AND_SYNC_NON_CRITICAL', {
-        baseUrl: typeof window !== 'undefined' ? window.location.origin : '',
-        token: tokenRef.current || '',
-        limit: 150
-      });
-      if (result) {
-        if (Array.isArray(result.logs)) safeSet(setSystemLogs, result.logs);
-        if (Array.isArray(result.interfaces)) safeSet(setInterfaces, result.interfaces);
-        if (Array.isArray(result.interfaceNames)) safeSet(setInterfaceNames, result.interfaceNames);
-        setBgSyncEngineState((prev) => ({
-          ...prev,
-          status: 'idle',
-          lastSyncTimestamp: Date.now(),
-          syncCount: prev.syncCount + 1,
-          error: undefined
-        }));
-      }
+      setBgSyncEngineState((prev) => ({
+        ...prev,
+        status: 'idle',
+        lastSyncTimestamp: Date.now(),
+        syncCount: prev.syncCount + 1,
+        error: undefined
+      }));
     } catch (err: any) {
       setBgSyncEngineState((prev) => ({
         ...prev,
@@ -1988,16 +2154,10 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         error: err.message || 'Background sync failed'
       }));
     }
-  }, [runWorkerTask]);
+  }, []);
 
   const adjustBackgroundSyncInterval = useCallback((ms: number) => {
-    if (mikrotikWorkerRef.current) {
-      mikrotikWorkerRef.current.postMessage({
-        type: 'ADJUST_SYNC_INTERVAL',
-        payload: { intervalMs: ms }
-      });
-      setBgSyncEngineState((prev) => ({ ...prev, intervalMs: ms }));
-    }
+    setBgSyncEngineState((prev) => ({ ...prev, intervalMs: ms }));
   }, []);
 
   const backgroundSyncEngine = useMemo(() => ({
@@ -2008,14 +2168,28 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     adjustInterval: adjustBackgroundSyncInterval
   }), [bgSyncEngineState, startBackgroundSync, stopBackgroundSync, triggerBackgroundSyncNow, adjustBackgroundSyncInterval]);
 
-  // Auto start/stop background sync worker based on router connection and WebSocket state (avoid duplicate polling when WS is active)
+  // Auto start/stop background sync worker based on router connection and WebSocket state (debounced to avoid brief handshake churn)
   useEffect(() => {
-    if (isConnected && !isRealtimeWsConnected) {
-      startBackgroundSync(45000);
-    } else {
+    const canRunBgWorker =
+      isConnected &&
+      !isRealtimeWsConnected &&
+      realtimeSyncMode !== 'paused' &&
+      (typeof document === 'undefined' || !document.hidden);
+
+    if (!canRunBgWorker) {
       stopBackgroundSync();
+      return;
     }
-  }, [isConnected, isRealtimeWsConnected, startBackgroundSync, stopBackgroundSync]);
+
+    const timer = setTimeout(() => {
+      startBackgroundSync(45000);
+    }, 8000);
+
+    return () => {
+      clearTimeout(timer);
+      stopBackgroundSync();
+    };
+  }, [isConnected, isRealtimeWsConnected, realtimeSyncMode, startBackgroundSync, stopBackgroundSync]);
 
   const connectToRouter = async (config: Partial<RouterConnection>) => {
     setIsConnecting(true);
@@ -2023,7 +2197,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       safeStorage.removeItem('zctrl_explicit_logout');
       const res = await fetch('/api/mikrotik/connect', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
         body: JSON.stringify(config)
       });
       const data = await res.json();
@@ -2040,7 +2218,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const sanitizedRouter: RouterConnection = {
           id: `r-${Date.now()}`,
           name: data.router.name || 'MikroTik RouterOS',
-          host: config.host || data.router.host || '192.168.88.1',
+          host: config.host || data.router.host || '',
           port: config.port || data.router.port || 8728,
           username: config.username || 'admin',
           useSsl: Boolean(config.useSsl),
@@ -2064,23 +2242,39 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setOperatorName(data.operatorName || config.operatorUsername || config.username || 'admin');
         setTlsFingerprint(data.tlsFingerprint ?? data.router.tlsFingerprint ?? null);
         setIsConnected(true);
+        if (typeof window !== 'undefined' && window.zctrlDesktopSession?.setActiveSession) {
+          window.zctrlDesktopSession.setActiveSession({
+            host: sanitizedRouter.host,
+            port: sanitizedRouter.port,
+            username: sanitizedRouter.username,
+            password: typeof config.password === 'string' ? config.password : '',
+            useTls: sanitizedRouter.useSsl,
+            timeoutMs: 8000,
+            tlsFingerprint: data.tlsFingerprint ?? config.tlsFingerprint ?? undefined,
+            acceptTlsFingerprint: config.acceptTlsFingerprint
+          }).catch(() => {});
+        }
         showToast(data.message || 'تم الاتصال بالراوتر بنجاح', 'success');
         
         // Execute calm initial sync (uses staged server sync without bypassing static caches)
         try {
           await syncNow(false);
-        } catch {}
+        } catch (err) {
+          logger.warn('Post-connect sync warning: ' + String(err), 'connectToRouter');
+        }
 
         return { success: true, message: data.message, router: sanitizedRouter };
       } else {
         const msg = data.message || translateErrorMessage(data.rawError || 'تعذر الاتصال بالسيرفر. تحقق من العنوان وبيانات الدخول');
         showToast(msg, 'error');
-        return { 
-          success: false, 
-          message: msg, 
-          suggestion: data.suggestion, 
+        return {
+          success: false,
+          message: msg,
+          suggestion: data.suggestion,
           rawError: data.rawError,
-          reasonType: data.reasonType 
+          reasonType: data.reasonType,
+          pendingFingerprint: data.pendingFingerprint,
+          pinnedFingerprint: data.pinnedFingerprint
         };
       }
     } catch (err: any) {
@@ -2097,9 +2291,15 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const activeToken = tokenRef.current || token || safeStorage.getItem('zcontrol_active_token');
       await fetch('/api/mikrotik/cancel-connect', {
         method: 'POST',
-        headers: activeToken ? { 'X-Router-Token': activeToken } : {}
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          ...(activeToken ? { 'X-Router-Token': activeToken } : {})
+        }
       });
-    } catch {}
+    } catch (err) {
+      logger.warn('Cancel-connect request warning: ' + String(err), 'cancelConnecting');
+    }
     showToast('تم إيقاف عملية الاتصال', 'info');
   };
 
@@ -2110,19 +2310,31 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     isConnectedRef.current = false;
     setToken(null);
     setIsConnected(false);
+    setIsRestoringSession(false);
     setRouter(null);
     setUserRole('admin');
     setOperatorName('');
     setTlsFingerprint(null);
     try {
       safeSession.removeItem('zctrl_session_authenticated');
+      safeSession.removeItem('zctrl_session_router_meta');
       safeSession.removeItem('zctrl_active_tab');
       safeStorage.setItem('zctrl_explicit_logout', 'true');
       safeStorage.removeItem('zcontrol_active_token');
       safeStorage.removeItem('zctrl_router_token');
       safeStorage.removeItem('zcontrol_session_token');
+      if (typeof window !== 'undefined' && window.zctrlDesktopSession?.clearActiveSession) {
+        window.zctrlDesktopSession.clearActiveSession().catch(() => {});
+      }
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'STOP_BACKGROUND_TELEMETRY' });
+      }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch {}
+        try {
+          wsRef.current.close();
+        } catch (err) {
+          logger.warn('WS close warning on disconnect: ' + String(err), 'disconnectRouter');
+        }
         wsRef.current = null;
       }
       if (silentReconnectTimerRef.current) {
@@ -2130,19 +2342,33 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         silentReconnectTimerRef.current = null;
       }
       if (tabFetchAbortRef.current) {
-        try { tabFetchAbortRef.current.abort(); } catch {}
+        try {
+          tabFetchAbortRef.current.abort();
+        } catch (err) {
+          logger.warn('Tab abort warning on disconnect: ' + String(err), 'disconnectRouter');
+        }
         tabFetchAbortRef.current = null;
       }
       if (streamAbortRef.current) {
-        try { streamAbortRef.current.abort(); } catch {}
+        try {
+          streamAbortRef.current.abort();
+        } catch (err) {
+          logger.warn('Stream abort warning on disconnect: ' + String(err), 'disconnectRouter');
+        }
         streamAbortRef.current = null;
       }
       setIsRealtimeWsConnected(false);
       fetch('/api/mikrotik/cancel-connect', {
         method: 'POST',
-        headers: activeToken ? { 'X-Router-Token': activeToken } : {}
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          ...(activeToken ? { 'X-Router-Token': activeToken } : {})
+        }
       }).catch(() => {});
-    } catch {}
+    } catch (err) {
+      logger.warn('Disconnect cleanup warning: ' + String(err), 'disconnectRouter');
+    }
     showToast('تم تسجيل الخروج وفصل الاتصال بنجاح', 'info');
   }, [setToken, showToast, token]);
 
@@ -2256,7 +2482,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     if (!isConnected || realtimeSyncMode === 'paused' || realtimeSyncMode === 'smart_polling') {
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch {}
+        try {
+          wsRef.current.close();
+        } catch (err) {
+          logger.warn('WS close warning on mode change: ' + String(err), 'MikroTikContext');
+        }
         wsRef.current = null;
       }
       setIsRealtimeWsConnected(false);
@@ -2265,6 +2495,99 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     let isDisposed = false;
     let reconnectAttempt = 0;
+    let wsFlushTimer: NodeJS.Timeout | null = null;
+    let lastWsFlushAt = 0;
+    const pendingWs: {
+      pingStabilizer?: PingStabilizerSnapshot;
+      interfaces?: NetworkInterface[];
+      activeHotspotUsers?: ActiveHotspotUser[];
+      pppActive?: PPPActive[];
+      queues?: SimpleQueue[];
+      leases?: DhcpLease[];
+      logs?: SystemLogEntry[];
+      system?: any;
+      hasUpdates: boolean;
+    } = { hasUpdates: false };
+
+    const flushPendingWs = () => {
+      if (wsFlushTimer) {
+        clearTimeout(wsFlushTimer);
+        wsFlushTimer = null;
+      }
+      if (isDisposed || !pendingWs.hasUpdates) return;
+      pendingWs.hasUpdates = false;
+      lastWsFlushAt = Date.now();
+
+      const snap = { ...pendingWs };
+      pendingWs.pingStabilizer = undefined;
+      pendingWs.interfaces = undefined;
+      pendingWs.activeHotspotUsers = undefined;
+      pendingWs.pppActive = undefined;
+      pendingWs.queues = undefined;
+      pendingWs.leases = undefined;
+      pendingWs.logs = undefined;
+      pendingWs.system = undefined;
+
+      if (snap.pingStabilizer) {
+        safeSet(setPingStabilizer, snap.pingStabilizer);
+      }
+      if (snap.interfaces) {
+        safeSet(setInterfaces, snap.interfaces);
+        saveGlobalCache('network_interfaces', snap.interfaces, router?.host);
+      }
+      if (snap.activeHotspotUsers) {
+        safeSet(setActiveUsers, snap.activeHotspotUsers);
+      }
+      if (snap.pppActive) {
+        safeSet(setPppActive, snap.pppActive);
+      }
+      if (snap.queues) {
+        safeSet(setSimpleQueues, snap.queues);
+      }
+      if (snap.leases) {
+        safeSet(setDhcpLeases, snap.leases);
+      }
+      if (snap.logs) {
+        safeSet(setSystemLogs, snap.logs);
+      }
+      if (snap.system) {
+        const s = snap.system;
+        lastCpuLoadRef.current = s.cpuLoad ?? 0;
+        setRouter((prev) => {
+          if (!prev) return null;
+          const cpuChanged = prev.cpuLoad !== s.cpuLoad;
+          const pingChanged = Math.abs((prev.pingMs || 0) - (s.pingMs || 0)) >= 2;
+          const memChanged = Math.abs((prev.freeMemory || 0) - (s.freeMemory || 0)) > 1024 * 512;
+          const tempChanged = prev.cpuTemperature !== s.cpuTemperature || prev.boardTemperature !== s.boardTemperature;
+          const uptimeChanged = prev.uptime !== s.uptime;
+
+          if (!cpuChanged && !pingChanged && !memChanged && !tempChanged && !uptimeChanged) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            cpuLoad: s.cpuLoad ?? prev.cpuLoad,
+            uptime: s.uptime ?? prev.uptime,
+            freeMemory: s.freeMemory ?? prev.freeMemory,
+            totalMemory: s.totalMemory ?? prev.totalMemory,
+            cpuTemperature: s.cpuTemperature ?? prev.cpuTemperature,
+            boardTemperature: s.boardTemperature ?? prev.boardTemperature,
+            pingMs: s.pingMs ?? prev.pingMs
+          };
+        });
+      }
+      updateLastSyncTime(false);
+    };
+
+    const scheduleWsFlush = () => {
+      pendingWs.hasUpdates = true;
+      if (wsFlushTimer) return;
+      const elapsed = Date.now() - lastWsFlushAt;
+      // Coalesce multi-channel frames received in the same burst (min 150ms, max 1000ms cadence)
+      const waitMs = elapsed >= 1000 ? 150 : Math.max(150, 1000 - elapsed);
+      wsFlushTimer = setTimeout(flushPendingWs, waitMs);
+    };
 
     const scheduleReconnect = () => {
       if (isDisposed || !isConnected) return;
@@ -2277,7 +2600,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (typeof document !== 'undefined' && document.hidden) return;
 
       const baseDelay = Math.min(30000, 2000 * Math.pow(2, Math.min(reconnectAttempt, 4)));
-      const jitter = Math.floor(Math.random() * 600);
+      const jitterArr = new Uint32Array(1);
+      crypto.getRandomValues(jitterArr);
+      const jitter = jitterArr[0] % 600;
       reconnectAttempt++;
       wsReconnectTimeoutRef.current = setTimeout(connectWs, baseDelay + jitter);
     };
@@ -2292,7 +2617,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const activeToken = tokenRef.current || token || safeStorage.getItem('zcontrol_active_token') || safeStorage.getItem('zctrl_router_token') || '';
-        const wsUrl = `${protocol}//${window.location.host}/api/ws/realtime?token=${encodeURIComponent(activeToken)}`;
+        const wsUrl = `${protocol}//${window.location.host}/api/ws/realtime`;
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
@@ -2313,6 +2638,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
           ws.send(JSON.stringify({
             type: 'subscribe',
+            ...(activeToken ? { token: activeToken } : {}),
             channels,
             tab,
             intervalMs: Math.round(activeRealtimeFrequencySec * 1000)
@@ -2327,63 +2653,41 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             lastRealtimePacketTimeRef.current = now;
 
             if (msg.type === 'ping_stabilizer:update' && msg.pingStabilizer) {
-              setPingStabilizer(msg.pingStabilizer);
+              pendingWs.pingStabilizer = msg.pingStabilizer;
+              scheduleWsFlush();
               return;
             }
 
             if (msg.type === 'traffic:update' && Array.isArray(msg.interfaces)) {
-              safeSet(setInterfaces, msg.interfaces);
-              saveGlobalCache('network_interfaces', msg.interfaces, router?.host);
-              updateLastSyncTime(false);
+              pendingWs.interfaces = msg.interfaces;
+              scheduleWsFlush();
             } else if (msg.type === 'sessions:update') {
               if (Array.isArray(msg.activeHotspotUsers)) {
-                safeSet(setActiveUsers, msg.activeHotspotUsers);
+                pendingWs.activeHotspotUsers = msg.activeHotspotUsers;
               }
               if (Array.isArray(msg.pppActive)) {
-                safeSet(setPppActive, msg.pppActive);
+                pendingWs.pppActive = msg.pppActive;
               }
-              updateLastSyncTime(false);
+              scheduleWsFlush();
             } else if (msg.type === 'queues:update' && Array.isArray(msg.queues)) {
-              safeSet(setSimpleQueues, msg.queues);
-              updateLastSyncTime(false);
+              pendingWs.queues = msg.queues;
+              scheduleWsFlush();
             } else if (msg.type === 'leases:update' && Array.isArray(msg.leases)) {
-              safeSet(setDhcpLeases, msg.leases);
-              updateLastSyncTime(false);
+              pendingWs.leases = msg.leases;
+              scheduleWsFlush();
             } else if (msg.type === 'logs:update' && Array.isArray(msg.logs)) {
-              safeSet(setSystemLogs, msg.logs);
-              updateLastSyncTime(false);
+              pendingWs.logs = msg.logs;
+              scheduleWsFlush();
             } else if (msg.type === 'system:update' && msg.system) {
-              const s = msg.system;
-              lastCpuLoadRef.current = s.cpuLoad ?? 0;
+              pendingWs.system = msg.system;
               if (msg.pingStabilizer) {
-                setPingStabilizer(msg.pingStabilizer);
+                pendingWs.pingStabilizer = msg.pingStabilizer;
               }
-              setRouter((prev) => {
-                if (!prev) return null;
-                const cpuChanged = prev.cpuLoad !== s.cpuLoad;
-                const pingChanged = Math.abs((prev.pingMs || 0) - (s.pingMs || 0)) >= 2;
-                const memChanged = Math.abs((prev.freeMemory || 0) - (s.freeMemory || 0)) > 1024 * 512;
-                const tempChanged = prev.cpuTemperature !== s.cpuTemperature || prev.boardTemperature !== s.boardTemperature;
-                const uptimeChanged = prev.uptime !== s.uptime;
-
-                if (!cpuChanged && !pingChanged && !memChanged && !tempChanged && !uptimeChanged) {
-                  return prev;
-                }
-
-                return {
-                  ...prev,
-                  cpuLoad: s.cpuLoad ?? prev.cpuLoad,
-                  uptime: s.uptime ?? prev.uptime,
-                  freeMemory: s.freeMemory ?? prev.freeMemory,
-                  totalMemory: s.totalMemory ?? prev.totalMemory,
-                  cpuTemperature: s.cpuTemperature ?? prev.cpuTemperature,
-                  boardTemperature: s.boardTemperature ?? prev.boardTemperature,
-                  pingMs: s.pingMs ?? prev.pingMs
-                };
-              });
-              updateLastSyncTime(false);
+              scheduleWsFlush();
             }
-          } catch {}
+          } catch (err) {
+            logger.warn('Invalid WS message payload: ' + String(err), 'MikroTikContext');
+          }
         };
 
         ws.onerror = () => {
@@ -2422,6 +2726,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     return () => {
       isDisposed = true;
+      if (wsFlushTimer) clearTimeout(wsFlushTimer);
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', handleResumeConnection);
       }
@@ -2430,7 +2735,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current);
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch {}
+        try {
+          wsRef.current.close();
+        } catch (err) {
+          logger.warn('WS close warning on unmount: ' + String(err), 'MikroTikContext');
+        }
         wsRef.current = null;
       }
       setIsRealtimeWsConnected(false);
@@ -2445,7 +2754,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           type: 'update_interval',
           intervalMs: Math.round(activeRealtimeFrequencySec * 1000)
         }));
-      } catch {}
+      } catch (err) {
+        logger.warn('WS update_interval send failed: ' + String(err), 'MikroTikContext');
+      }
     }
   }, [activeRealtimeFrequencySec]);
 
@@ -2459,7 +2770,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           isHidden: typeof document !== 'undefined' ? document.hidden : false,
           isIdle: isUserIdleRef.current
         }));
-      } catch {}
+      } catch (err) {
+        logger.warn('WS tab_change send failed: ' + String(err), 'MikroTikContext');
+      }
     }
   }, [currentActiveTab]);
 
@@ -2471,10 +2784,12 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.stabilizer) {
-          setPingStabilizer(json.stabilizer);
+          safeSet(setPingStabilizer, json.stabilizer);
         }
       }
-    } catch {}
+    } catch (err) {
+      logger.warn('Failed refreshing ping stabilizer: ' + String(err), 'refreshPingStabilizer');
+    }
   }, [fetchWithToken]);
 
   const updatePingStabilizerConfig = useCallback(async (config: {
@@ -2492,7 +2807,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       const json = await res.json();
       if (json.success && json.stabilizer) {
-        setPingStabilizer(json.stabilizer);
+        safeSet(setPingStabilizer, json.stabilizer);
         showToast(json.message || 'تم تحديث إعدادات منظم البينج بنجاح', 'success');
         return { success: true, message: json.message };
       }
@@ -2518,9 +2833,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       const json = await res.json();
       if (json.success) {
-        if (json.stabilizer) setPingStabilizer(json.stabilizer);
+        if (json.stabilizer) safeSet(setPingStabilizer, json.stabilizer);
         if (json.probe?.avgPingMs) {
-          setRouter((prev) => prev ? { ...prev, pingMs: json.probe.avgPingMs } : prev);
+          setRouter((prev) => prev ? (prev.pingMs === json.probe.avgPingMs ? prev : { ...prev, pingMs: json.probe.avgPingMs }) : prev);
         }
         showToast(json.message || 'تم فحص وضبط البينج تلقائياً بنجاح', 'success');
         return { success: true, message: json.message, probe: json.probe };
@@ -2536,7 +2851,48 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [fetchWithToken, showToast]);
 
-  const toggleQosFastLane = useCallback(async (enable: boolean, prioritizeManagementApi: boolean = true) => {
+  const previewQosFastLane = useCallback(async (options?: {
+    prioritizeManagementApi?: boolean;
+    interfaceList?: string;
+    maxLimit?: string;
+  }) => {
+    if (!isConnectedRef.current) {
+      return { success: false, message: 'الراوتر غير متصل حالياً' };
+    }
+    try {
+      const params = new URLSearchParams();
+      if (options?.prioritizeManagementApi !== undefined) {
+        params.set('prioritizeManagementApi', String(options.prioritizeManagementApi));
+      }
+      if (options?.interfaceList) {
+        params.set('interfaceList', options.interfaceList);
+      }
+      if (options?.maxLimit) {
+        params.set('maxLimit', options.maxLimit);
+      }
+      const qs = params.toString();
+      const res = await fetchWithToken(`/api/mikrotik/ping-stabilizer/qos-preview${qs ? `?${qs}` : ''}`);
+      const json = await res.json();
+      if (json.success) {
+        return {
+          success: true,
+          rules: json.rules as QosRulePreview[],
+          interfaceList: json.interfaceList,
+          maxLimit: json.maxLimit,
+          message: json.message
+        };
+      }
+      return { success: false, message: json.message || 'تعذر معاينة قواعد QoS' };
+    } catch (err: any) {
+      return { success: false, message: translateErrorMessage(err) };
+    }
+  }, [fetchWithToken]);
+
+  const toggleQosFastLane = useCallback(async (
+    enable: boolean,
+    prioritizeManagementApi: boolean = true,
+    options?: { interfaceList?: string; maxLimit?: string }
+  ) => {
     if (!isConnectedRef.current) {
       return { success: false, message: 'الراوتر غير متصل حالياً' };
     }
@@ -2545,11 +2901,16 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const res = await fetchWithToken('/api/mikrotik/ping-stabilizer/qos-fastlane', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enable, prioritizeManagementApi })
+        body: JSON.stringify({
+          enable,
+          prioritizeManagementApi,
+          interfaceList: options?.interfaceList,
+          maxLimit: options?.maxLimit
+        })
       });
       const json = await res.json();
       if (json.success) {
-        if (json.stabilizer) setPingStabilizer(json.stabilizer);
+        if (json.stabilizer) safeSet(setPingStabilizer, json.stabilizer);
         showToast(json.message || (enable ? 'تم تفعيل مسار أولوية البينج بالراوتر' : 'تمت إزالة مسار أولوية البينج'), 'success');
         return { success: true, message: json.message };
       }
@@ -2575,7 +2936,13 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     let idleTimer: NodeJS.Timeout | null = null;
-    const resetIdleTimer = () => {
+    let lastActivityPingAt = 0;
+    const resetIdleTimer = (evt?: Event) => {
+      const now = Date.now();
+      if (evt?.type === 'mousemove' && !isUserIdleRef.current && now - lastActivityPingAt < 3000) {
+        return;
+      }
+      lastActivityPingAt = now;
       if (isUserIdleRef.current) {
         isUserIdleRef.current = false;
         setIsUserIdle(false);
@@ -2599,13 +2966,17 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           try {
             wsRef.current.send(JSON.stringify({ type: 'client_state', isHidden: false, isIdle: false }));
-          } catch {}
+          } catch (err) {
+            logger.warn('WS client_state active send failed: ' + String(err), 'MikroTikContext');
+          }
         }
       } else if (typeof document !== 'undefined' && document.hidden) {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           try {
             wsRef.current.send(JSON.stringify({ type: 'client_state', isHidden: true, isIdle: true }));
-          } catch {}
+          } catch (err) {
+            logger.warn('WS client_state hidden send failed: ' + String(err), 'MikroTikContext');
+          }
         }
       }
     };
@@ -2629,7 +3000,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     if (!isConnected || !autoSync || realtimeSyncMode === 'paused') return;
 
-    const intervalMs = Math.round(activeRealtimeFrequencySec * 1000);
+    const intervalMs = isRealtimeWsConnected
+      ? 60000
+      : Math.round(activeRealtimeFrequencySec * 1000);
 
     const interval = setInterval(() => {
       // 1. If tab is hidden in background, completely suspend polling (0% CPU, 0% router heat)
@@ -2637,10 +3010,10 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
 
-      // 2. If WebSocket is actively connected, WS pushes real-time telemetry;
-      // Only run a gentle non-telemetry table refresh every 120s
+      // 2. When WebSocket is actively connected, rely exclusively on WS + tab-change sync
+      // (avoid redundant 120s full-sync loops that duplicate WS telemetry)
       if (isRealtimeWsConnected) {
-        if (Date.now() - lastSyncTimeRef.current > 120000) {
+        if (lastSyncTimeRef.current === 0) {
           syncNow();
         }
         return;
@@ -2659,7 +3032,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           })
           .catch(() => {});
       } else if (activeTab === 'active_sessions') {
-        fetchWithToken('/api/mikrotik/data/sync/hotspot')
+        fetchWithToken('/api/mikrotik/data/sync/hotspot?activeOnly=true')
           .then((r) => r.json())
           .then((j) => {
             if (j.success && j.data?.activeHotspotUsers) {
@@ -2669,7 +3042,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           })
           .catch(() => {});
       } else if (activeTab === 'ppp') {
-        fetchWithToken('/api/mikrotik/data/sync/ppp')
+        fetchWithToken('/api/mikrotik/data/sync/ppp?activeOnly=true')
           .then((r) => r.json())
           .then((j) => {
             if (j.success && Array.isArray(j.data?.active)) {
@@ -2699,7 +3072,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           })
           .catch(() => {});
       } else if (activeTab === 'logs') {
-        fetchWithToken('/api/mikrotik/data/sync/network')
+        fetchWithToken('/api/mikrotik/data/sync/network?includeLogs=true')
           .then((r) => r.json())
           .then((j) => {
             if (j.success && Array.isArray(j.data?.logs)) {
@@ -2716,16 +3089,37 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               const d = j.data;
               lastCpuLoadRef.current = d.cpuLoad ?? 0;
               if (Array.isArray(d.interfaces)) safeSet(setInterfaces, d.interfaces);
-              setRouter((prev) => prev ? {
-                ...prev,
-                cpuLoad: d.cpuLoad ?? prev.cpuLoad,
-                cpuTemperature: d.cpuTemperature ?? prev.cpuTemperature,
-                boardTemperature: d.boardTemperature ?? prev.boardTemperature,
-                uptime: d.uptime ?? prev.uptime,
-                freeMemory: d.freeMemory ?? prev.freeMemory,
-                totalMemory: d.totalMemory ?? prev.totalMemory,
-                pingMs: d.pingMs ?? prev.pingMs
-              } : null);
+              setRouter((prev) => {
+                if (!prev) return null;
+                const nextCpu = d.cpuLoad ?? prev.cpuLoad;
+                const nextCpuTemp = d.cpuTemperature ?? prev.cpuTemperature;
+                const nextBoardTemp = d.boardTemperature ?? prev.boardTemperature;
+                const nextUptime = d.uptime ?? prev.uptime;
+                const nextFree = d.freeMemory ?? prev.freeMemory;
+                const nextTotal = d.totalMemory ?? prev.totalMemory;
+                const nextPing = d.pingMs ?? prev.pingMs;
+                if (
+                  prev.cpuLoad === nextCpu &&
+                  prev.cpuTemperature === nextCpuTemp &&
+                  prev.boardTemperature === nextBoardTemp &&
+                  prev.uptime === nextUptime &&
+                  prev.freeMemory === nextFree &&
+                  prev.totalMemory === nextTotal &&
+                  prev.pingMs === nextPing
+                ) {
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  cpuLoad: nextCpu,
+                  cpuTemperature: nextCpuTemp,
+                  boardTemperature: nextBoardTemp,
+                  uptime: nextUptime,
+                  freeMemory: nextFree,
+                  totalMemory: nextTotal,
+                  pingMs: nextPing
+                };
+              });
               updateLastSyncTime(false);
             }
           })
@@ -2738,7 +3132,13 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             .then((j) => {
               if (j.success && j.data) {
                 const d = j.data;
-                setRouter((prev) => prev ? { ...prev, cpuLoad: d.cpuLoad ?? prev.cpuLoad, pingMs: d.pingMs ?? prev.pingMs } : null);
+                setRouter((prev) => {
+                  if (!prev) return null;
+                  const nextCpu = d.cpuLoad ?? prev.cpuLoad;
+                  const nextPing = d.pingMs ?? prev.pingMs;
+                  if (prev.cpuLoad === nextCpu && prev.pingMs === nextPing) return prev;
+                  return { ...prev, cpuLoad: nextCpu, pingMs: nextPing };
+                });
               }
             })
             .catch(() => {});
@@ -2755,7 +3155,9 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       try {
         wsRef.current.send(JSON.stringify({ type: 'sync_now' }));
-      } catch {}
+      } catch (err) {
+        logger.warn('WS sync_now send failed: ' + String(err), 'triggerRealtimeSync');
+      }
     }
     syncNow(force);
   }, [syncNow]);
@@ -2794,11 +3196,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
 
         showToast(
-          `⚠️ تنبيه الأداء: استهلاك معالج الراوتر (CPU) وصل إلى ${cpu}%، تم تفعيل درع تبريد العمليات لضمان الاستقرار.`,
+          `تنبيه الأداء: استهلاك معالج الراوتر (CPU) وصل إلى ${cpu}%، تم تفعيل درع تبريد العمليات لضمان الاستقرار.`,
           'warning',
           {
             action: {
-              label: 'تأكيد التبريد ❄️',
+              label: 'تأكيد التبريد',
               onClick: () => {
                 setEcoMode(true);
                 showToast('تم تأكيد تفعيل درع التبريد وخفض استهلاك المعالج', 'success');
@@ -2827,11 +3229,11 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         prevRamHighRef.current = true;
 
         showToast(
-          `⚠️ تنبيه الموارد: استهلاك ذاكرة الراوتر (RAM) وصل إلى ${ramPercent}% (المتبقي ${Math.round(freeMem / 1024 / 1024)}MB). يوصى بتفريغ كاش الـ DNS.`,
+          `تنبيه الموارد: استهلاك ذاكرة الراوتر (RAM) وصل إلى ${ramPercent}% (المتبقي ${Math.round(freeMem / 1024 / 1024)}MB). يوصى بتفريغ كاش الـ DNS.`,
           'warning',
           {
             action: {
-              label: 'تفريغ كاش DNS 🔄',
+              label: 'تفريغ كاش DNS',
               onClick: async () => {
                 const res = await runCommand('/ip dns cache flush');
                 if (res.success) {
@@ -2852,6 +3254,239 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [isConnected, router?.cpuLoad, router?.freeMemory, router?.totalMemory, ecoMode, setEcoMode, showToast, runCommand, syncNow]);
 
+  const routerIdentity = useMemo<RouterIdentitySummary | null>(() => {
+    if (!router) return null;
+    return {
+      id: router.id,
+      name: router.name,
+      host: router.host,
+      port: router.port,
+      username: router.username,
+      boardName: router.boardName,
+      version: router.version,
+      useSsl: router.useSsl
+    };
+  }, [
+    router?.id,
+    router?.name,
+    router?.host,
+    router?.port,
+    router?.username,
+    router?.boardName,
+    router?.version,
+    router?.useSsl
+  ]);
+
+  const connectionSessionValue = useMemo<ConnectionSessionContextType>(() => ({
+    routerIdentity,
+    userRole,
+    operatorName,
+    tlsFingerprint,
+    isConnected,
+    isConnecting,
+    isRestoringSession,
+    isSilentReconnecting,
+    reconnectAttempts,
+    currentActiveTab,
+    savedRouters,
+    connectionProfiles,
+    activeProfileId,
+    toast
+  }), [
+    routerIdentity,
+    userRole,
+    operatorName,
+    tlsFingerprint,
+    isConnected,
+    isConnecting,
+    isRestoringSession,
+    isSilentReconnecting,
+    reconnectAttempts,
+    currentActiveTab,
+    savedRouters,
+    connectionProfiles,
+    activeProfileId,
+    toast
+  ]);
+
+  const routerTelemetryValue = useMemo<RouterTelemetryContextType>(() => ({
+    router,
+    interfaces,
+    interfaceNames,
+    pingStabilizer,
+    lastSyncTime,
+    lastRealtimePacketTime,
+    isRealtimeWsConnected,
+    realtimeSyncMode,
+    realtimeFrequency,
+    activeRealtimeFrequencySec,
+    isResourceSaving,
+    thermalShieldActive,
+    ecoMode,
+    isUserIdle,
+    autoSync,
+    syncFrequency,
+    isOptimizingPing,
+    isSyncingSystem,
+    streamStatus,
+    dataPrefetcher,
+    backgroundSyncEngine
+  }), [
+    router,
+    interfaces,
+    interfaceNames,
+    pingStabilizer,
+    lastSyncTime,
+    lastRealtimePacketTime,
+    isRealtimeWsConnected,
+    realtimeSyncMode,
+    realtimeFrequency,
+    activeRealtimeFrequencySec,
+    isResourceSaving,
+    thermalShieldActive,
+    ecoMode,
+    isUserIdle,
+    autoSync,
+    syncFrequency,
+    isOptimizingPing,
+    isSyncingSystem,
+    streamStatus,
+    dataPrefetcher,
+    backgroundSyncEngine
+  ]);
+
+  const subscribersStateValue = useMemo<SubscribersStateContextType>(() => ({
+    users,
+    profiles,
+    activeUsers,
+    pppSecrets,
+    pppProfiles,
+    pppActive,
+    usermanUsers,
+    usermanProfiles,
+    usermanActive,
+    selectedUsersForPrint,
+    cardTemplate,
+    isSyncingHotspot,
+    isSyncingPPP
+  }), [
+    users,
+    profiles,
+    activeUsers,
+    pppSecrets,
+    pppProfiles,
+    pppActive,
+    usermanUsers,
+    usermanProfiles,
+    usermanActive,
+    selectedUsersForPrint,
+    cardTemplate,
+    isSyncingHotspot,
+    isSyncingPPP
+  ]);
+
+  const networkStateValue = useMemo<NetworkStateContextType>(() => ({
+    simpleQueues,
+    ipBindings,
+    dhcpLeases,
+    firewallRules,
+    systemLogs,
+    wirelessInterfaces,
+    registrationTable,
+    neighbors,
+    remoteCaps,
+    accessPoints,
+    hotspotServerProfiles,
+    hotspotServers,
+    routerFiles,
+    scheduledTasks,
+    isSyncingNetwork,
+    isLoadingWireless,
+    isLoadingAntennas,
+    isLoadingAccessPoints,
+    isLoadingPortalProfiles,
+    isLoadingSchedulers
+  }), [
+    simpleQueues,
+    ipBindings,
+    dhcpLeases,
+    firewallRules,
+    systemLogs,
+    wirelessInterfaces,
+    registrationTable,
+    neighbors,
+    remoteCaps,
+    accessPoints,
+    hotspotServerProfiles,
+    hotspotServers,
+    routerFiles,
+    scheduledTasks,
+    isSyncingNetwork,
+    isLoadingWireless,
+    isLoadingAntennas,
+    isLoadingAccessPoints,
+    isLoadingPortalProfiles,
+    isLoadingSchedulers
+  ]);
+
+  const mikrotikActionsValue = useMemo<MikroTikActionsContextType>(() => ({
+    setAutoSync: handleSetAutoSync,
+    setSyncFrequency,
+    setEcoMode,
+    setCurrentActiveTab,
+    setRealtimeSyncMode,
+    setRealtimeFrequency,
+    triggerRealtimeSync,
+    refreshPingStabilizer,
+    updatePingStabilizerConfig,
+    optimizePingNow,
+    toggleQosFastLane,
+    previewQosFastLane,
+    streamSubscribersByTabPriority,
+    setSelectedUsersForPrint,
+    setCardTemplate,
+    saveRouter,
+    deleteSavedRouter,
+    saveConnectionProfile,
+    deleteConnectionProfile,
+    setDefaultConnectionProfile,
+    activateConnectionProfile,
+    connectToRouter,
+    cancelConnecting,
+    disconnectRouter,
+    syncNow,
+    refreshQueues,
+    refreshProfiles,
+    ...subscriberActions,
+    ...networkPortalActions,
+    showToast
+  }), [
+    handleSetAutoSync,
+    setSyncFrequency,
+    setEcoMode,
+    setCurrentActiveTab,
+    setRealtimeSyncMode,
+    setRealtimeFrequency,
+    triggerRealtimeSync,
+    refreshPingStabilizer,
+    updatePingStabilizerConfig,
+    optimizePingNow,
+    toggleQosFastLane,
+    previewQosFastLane,
+    streamSubscribersByTabPriority,
+    saveConnectionProfile,
+    deleteConnectionProfile,
+    setDefaultConnectionProfile,
+    activateConnectionProfile,
+    disconnectRouter,
+    syncNow,
+    refreshQueues,
+    refreshProfiles,
+    subscriberActions,
+    networkPortalActions,
+    showToast
+  ]);
+
   const contextValue = useMemo(() => ({
     router,
     userRole,
@@ -2859,6 +3494,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     tlsFingerprint,
     isConnected,
     isConnecting,
+    isRestoringSession,
     isSilentReconnecting,
     reconnectAttempts,
     lastSyncTime,
@@ -2887,6 +3523,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     updatePingStabilizerConfig,
     optimizePingNow,
     toggleQosFastLane,
+    previewQosFastLane,
     dataPrefetcher,
     backgroundSyncEngine,
     interfaceNames,
@@ -2955,6 +3592,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     tlsFingerprint,
     isConnected,
     isConnecting,
+    isRestoringSession,
     isSilentReconnecting,
     reconnectAttempts,
     lastSyncTime,
@@ -2983,6 +3621,7 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     updatePingStabilizerConfig,
     optimizePingNow,
     toggleQosFastLane,
+    previewQosFastLane,
     dataPrefetcher,
     isSyncingSystem,
     isSyncingHotspot,
@@ -3036,10 +3675,60 @@ export const MikroTikProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   ]);
 
   return (
-    <MikroTikContext.Provider value={contextValue}>
-      {children}
-    </MikroTikContext.Provider>
+    <MikroTikActionsContext.Provider value={mikrotikActionsValue}>
+      <ConnectionSessionContext.Provider value={connectionSessionValue}>
+        <RouterTelemetryContext.Provider value={routerTelemetryValue}>
+          <SubscribersStateContext.Provider value={subscribersStateValue}>
+            <NetworkStateContext.Provider value={networkStateValue}>
+              <MikroTikContext.Provider value={contextValue}>
+                {children}
+              </MikroTikContext.Provider>
+            </NetworkStateContext.Provider>
+          </SubscribersStateContext.Provider>
+        </RouterTelemetryContext.Provider>
+      </ConnectionSessionContext.Provider>
+    </MikroTikActionsContext.Provider>
   );
+};
+
+export const useConnectionSession = () => {
+  const context = useContext(ConnectionSessionContext);
+  if (!context) {
+    throw new Error('useConnectionSession must be used within a MikroTikProvider');
+  }
+  return context;
+};
+
+export const useRouterTelemetry = () => {
+  const context = useContext(RouterTelemetryContext);
+  if (!context) {
+    throw new Error('useRouterTelemetry must be used within a MikroTikProvider');
+  }
+  return context;
+};
+
+export const useSubscribersState = () => {
+  const context = useContext(SubscribersStateContext);
+  if (!context) {
+    throw new Error('useSubscribersState must be used within a MikroTikProvider');
+  }
+  return context;
+};
+
+export const useNetworkState = () => {
+  const context = useContext(NetworkStateContext);
+  if (!context) {
+    throw new Error('useNetworkState must be used within a MikroTikProvider');
+  }
+  return context;
+};
+
+export const useMikroTikActions = () => {
+  const context = useContext(MikroTikActionsContext);
+  if (!context) {
+    throw new Error('useMikroTikActions must be used within a MikroTikProvider');
+  }
+  return context;
 };
 
 export const useMikroTik = () => {

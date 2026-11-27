@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import { MikrotikAPI, type MikrotikClient } from '../mikrotik-api.ts';
 import { generateSetupScript, type SetupConfig } from '../mikrotikSetupScript.ts';
+import { appLogger } from '../rotatingLogger.ts';
+import { sanitizeRouterOsIdentifier } from '../utils/routerNormalizers.ts';
 
 export interface SetupCheckDetail {
   name: string;
@@ -12,16 +14,16 @@ export interface SetupCheckDetail {
 export const setupRouterApi = async (req: Request, res: Response) => {
   const client: MikrotikClient = (req as any).routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "غير متصل بالراوتر حالياً. يرجى الاتصال بالراوتر أولاً من شاشة تسجيل الدخول." 
+    return res.status(503).json({
+      success: false,
+      reconnecting: true,
+      message: "جاري إعادة الاتصال بالراوتر"
     });
   }
 
   const { type } = req.params; // check, apply, update
   const config: Partial<SetupConfig> = req.body || {};
-  const lanBridge = (config.lanBridge || 'bridge1').trim();
-  const wanIface = (config.wanInterface || 'ether1').trim();
+  const lanBridge = sanitizeRouterOsIdentifier(config.lanBridge, 'bridge1');
 
   if (type === 'apply' || type === 'update') {
     const scriptName = `zctrl_setup_${Date.now()}`;
@@ -54,7 +56,12 @@ export const setupRouterApi = async (req: Request, res: Response) => {
         if (Array.isArray(found) && found.length > 0 && found[0]?.['.id']) {
           await client.query('/system/script/remove', [`=.id=${found[0]['.id']}`]);
         }
-      } catch {}
+      } catch (cleanupErr) {
+        appLogger.warn('setup', 'Failed to remove temporary router setup script', {
+          scriptName,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+        });
+      }
     }
   } else if (type === 'check') {
     try {

@@ -9,10 +9,10 @@ interface LogoZProps {
 export const LogoZ: React.FC<LogoZProps> = ({ size = 80, className = '', disableGlow = false }) => {
   return (
     <div
-      className={`relative inline-flex items-center justify-center select-none bg-transparent transition-transform duration-300 hover:scale-105 ${className}`}
+      className={`relative inline-flex items-center justify-center select-none bg-transparent ${className}`}
       style={{ width: size, height: size }}
     >
-      {/* Optional subtle lighting highlight without blur glow */}
+      {/* Optional subtle static lighting highlight */}
       {!disableGlow && (
         <div
           className="absolute inset-0 rounded-full bg-amber-500/10 scale-90 pointer-events-none"
@@ -20,11 +20,10 @@ export const LogoZ: React.FC<LogoZProps> = ({ size = 80, className = '', disable
         />
       )}
 
-      {/* Executive 3D Gold & Cyber Vector Logo with Shimmer Animation */}
+      {/* Executive 3D Gold & Cyber Vector Logo */}
       <img
         src="/icon.svg"
         onError={(e) => {
-          // Fallback to PNG if SVG is blocked in rare environments
           const target = e.currentTarget;
           if (target.src.endsWith('/icon.svg')) {
             target.src = '/icon.png';
@@ -33,7 +32,7 @@ export const LogoZ: React.FC<LogoZProps> = ({ size = 80, className = '', disable
         alt="ZCtrl Logo"
         width={size}
         height={size}
-        className="relative z-10 w-full h-full object-contain animate-zctrl-logo filter drop-shadow-[0_4px_16px_rgba(245,158,11,0.25)]"
+        className="relative z-10 w-full h-full object-contain filter drop-shadow-[0_4px_12px_rgba(245,158,11,0.2)]"
         referrerPolicy="no-referrer"
         draggable={false}
       />

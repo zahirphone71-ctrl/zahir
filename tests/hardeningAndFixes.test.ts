@@ -438,9 +438,11 @@ test('POST /api/mikrotik/firewall/quick-harden enforces offline guard and applie
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    // 1. Offline guard returns 401
+    // 1. Offline guard returns 503 reconnecting (prevents false frontend logout)
     const offlineRes = await fetch(`${baseUrl}/api/mikrotik/firewall/quick-harden`, { method: 'POST' });
-    assert.equal(offlineRes.status, 401);
+    assert.equal(offlineRes.status, 503);
+    const offlineJson: any = await offlineRes.json();
+    assert.equal(offlineJson.reconnecting, true);
 
     // 2. Online first call adds 4 safe rules
     connected = true;

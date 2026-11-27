@@ -6,6 +6,7 @@ import {
 import { VoucherItem, VoucherDesignState } from './types';
 import { generateStandaloneVoucherHtmlAsync } from './voucherHtmlGenerator';
 import { preGenerateQrCodes } from './qrPreGenerator';
+import { autoCalcGrid } from './gridCalculator';
 import { safeStorage } from '../../utils/safeStorage';
 import { printHtmlSafely } from '../../lib/printHelper';
 import { secureFetch, safeParseJson } from '../../lib/api';
@@ -47,6 +48,7 @@ export const AllVouchersTab: React.FC<AllVouchersTabProps> = ({
   // Sync / deletion progress states
   const [syncingBatchId, setSyncingBatchId] = useState<string | null>(null);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
+  const [pendingPrintFallback, setPendingPrintFallback] = useState<{ batch: any; vouchers: VoucherItem[] } | null>(null);
 
   const unsyncedBatchCount = useMemo(() => {
     return vouchers.filter(v => !v.isSynced).length;
@@ -268,6 +270,71 @@ export const AllVouchersTab: React.FC<AllVouchersTabProps> = ({
     }
   };
 
+  const executeFallbackPrintBatch = async (batch: any, batchVouchers: VoucherItem[]) => {
+    const baseDesign: VoucherDesignState = design ? { ...design } : ({
+      theme: "modern",
+      paperOrientation: "portrait",
+      columnsCount: 3,
+      rowsCount: 7,
+      networkName,
+      currencySymbol,
+      loginUrl,
+      showQr: true,
+      showCutLines: true,
+    } as any);
+
+    const batchAuthMode = (batch?.authMode as any) || baseDesign.authMode || "user_only";
+    const effectiveDesign: VoucherDesignState = { ...baseDesign, authMode: batchAuthMode };
+    const gridInfo = autoCalcGrid({
+      cardWidthMm: effectiveDesign.cardWidthMm || 85,
+      cardHeightMm: effectiveDesign.cardHeightMm || 52,
+      paperType: effectiveDesign.paperType || 'a4',
+      paperOrientation: effectiveDesign.paperOrientation || 'portrait',
+      cardGap: effectiveDesign.cardGap ?? 4,
+      cardMarginTop: effectiveDesign.cardMarginTop ?? 5,
+      cardMarginSide: effectiveDesign.cardMarginSide ?? 4,
+      totalCards: batchVouchers.length,
+      customCols: effectiveDesign.columnsCount || 3,
+      customRows: effectiveDesign.rowsCount || 7,
+    });
+
+    const qrMap = effectiveDesign.showQr !== false
+      ? await preGenerateQrCodes(
+          batchVouchers,
+          effectiveDesign.loginUrl || loginUrl || "10.0.0.1",
+          batchAuthMode,
+          120
+        )
+      : new Map<string, string>();
+
+    const html = await generateStandaloneVoucherHtmlAsync({
+      vouchers: batchVouchers,
+      design: effectiveDesign,
+      networkName: effectiveDesign.networkName || networkName,
+      currencySymbol: effectiveDesign.currencySymbol || currencySymbol,
+      loginUrl: effectiveDesign.loginUrl || loginUrl,
+      cols: gridInfo.cols,
+      rows: gridInfo.rows,
+      theme: effectiveDesign.theme || 'modern',
+      isPos: gridInfo.isPos,
+      showCutMarks: effectiveDesign.showCutLines !== false,
+      showQr: effectiveDesign.showQr !== false,
+      showPin: batchAuthMode === "user_pass" || batchAuthMode === "user_equals_pass" || (effectiveDesign as any).sameUserPass === true,
+      qrDataUrlMap: qrMap,
+      fontScale: gridInfo.fontScale,
+      gapMm: gridInfo.gapMm,
+      paddingMm: gridInfo.paddingMm
+    });
+
+    await printHtmlSafely(html, {
+      fileName: `vouchers-${batch.batchId}.html`,
+      onFallbackDownload: () => {
+        showToast('تم تحميل كروت الدفعة كملف HTML للطباعة', 'info');
+      }
+    });
+    showToast('تم فتح أمر الطباعة للدفعة بنجاح', 'success');
+  };
+
   // Print cards of a batch
   const handlePrintBatch = async (batch: any) => {
     try {
@@ -283,54 +350,12 @@ export const AllVouchersTab: React.FC<AllVouchersTabProps> = ({
           onPrintBatch(data.vouchers, batch.batchId);
           return;
         }
-
-        const baseDesign: VoucherDesignState = design ? { ...design } : ({
-          theme: "modern",
-          paperOrientation: "portrait",
-          columnsCount: 3,
-          rowsCount: 7,
-          networkName,
-          currencySymbol,
-          loginUrl,
-          showQr: true,
-          showCutLines: true,
-        } as any);
-
-        const batchAuthMode = (batch?.authMode as any) || baseDesign.authMode || "user_only";
-        const effectiveDesign: VoucherDesignState = { ...baseDesign, authMode: batchAuthMode };
-
-        const qrMap = await preGenerateQrCodes(
-          data.vouchers,
-          effectiveDesign.loginUrl || loginUrl || "10.0.0.1",
-          batchAuthMode,
-          120
-        );
-
-        const html = await generateStandaloneVoucherHtmlAsync({
-          vouchers: data.vouchers,
-          design: effectiveDesign,
-          networkName: effectiveDesign.networkName || networkName,
-          currencySymbol: effectiveDesign.currencySymbol || currencySymbol,
-          loginUrl: effectiveDesign.loginUrl || loginUrl,
-          cols: effectiveDesign.columnsCount || 3,
-          rows: effectiveDesign.rowsCount || 7,
-          theme: effectiveDesign.theme || 'modern',
-          showCutMarks: true,
-          showQr: true,
-          showPin: batchAuthMode === "user_pass" || batchAuthMode === "user_equals_pass" || (effectiveDesign as any).sameUserPass === true,
-          qrDataUrlMap: qrMap,
-          fontScale: 1.0,
-          gapMm: 4,
-          paddingMm: 4
-        });
-
-        await printHtmlSafely(html, {
-          fileName: `vouchers-${batch.batchId}.html`,
-          onFallbackDownload: () => {
-            showToast('تم تحميل كروت الدفعة كملف HTML للطباعة', 'info');
-          }
-        });
-        showToast('تم فتح أمر الطباعة للدفعة بنجاح', 'success');
+        const unsyncedCount = data.vouchers.filter((v: VoucherItem) => !v.isSynced).length;
+        if (unsyncedCount > 0) {
+          setPendingPrintFallback({ batch, vouchers: data.vouchers });
+          return;
+        }
+        await executeFallbackPrintBatch(batch, data.vouchers);
       } else {
         showToast('لا توجد كروت في هذه الدفعة للطباعة', 'error');
       }
@@ -845,6 +870,21 @@ export const AllVouchersTab: React.FC<AllVouchersTabProps> = ({
         isLoading={!!deletingBatchId}
         onConfirm={handleExecuteDeleteBatch}
         onClose={() => setBatchToDelete(null)}
+      />
+
+      <ConfirmModal
+        isOpen={!!pendingPrintFallback}
+        title="تنبيه: هذه الدفعة غير محقونة بالمايكروتك"
+        message="تحتوي هذه الدفعة على كروت لم تُحقن بعد في راوتر المايكروتك. هل تريد طباعتها على أي حال؟"
+        confirmText="نعم، متابعة الطباعة"
+        cancelText="إلغاء"
+        type="warning"
+        onConfirm={() => {
+          const item = pendingPrintFallback;
+          setPendingPrintFallback(null);
+          if (item) void executeFallbackPrintBatch(item.batch, item.vouchers);
+        }}
+        onClose={() => setPendingPrintFallback(null)}
       />
     </div>
   );

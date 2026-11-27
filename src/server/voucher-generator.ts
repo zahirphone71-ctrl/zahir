@@ -39,14 +39,19 @@ export function calculateSafeLength(quantity: number, charSetSize: number): numb
  */
 export function generateRandomString(length: number, charSet: string): string {
   const charSetLen = charSet.length;
-  if (charSetLen === 0) return '';
+  if (charSetLen === 0 || length <= 0) return '';
 
-  const bytes = crypto.randomBytes(length * 2);
+  const maxValid = Math.floor(256 / charSetLen) * charSetLen;
   let result = '';
-  for (let i = 0; i < length; i++) {
-    // استخدام خوارزمية رفض الانحياز (Unbiased Modulo)
-    const byte = bytes[i];
-    result += charSet[byte % charSetLen];
+  while (result.length < length) {
+    const needed = length - result.length;
+    const buf = crypto.randomBytes(Math.max(16, needed * 2));
+    for (let i = 0; i < buf.length && result.length < length; i++) {
+      const byte = buf[i];
+      if (byte < maxValid) {
+        result += charSet[byte % charSetLen];
+      }
+    }
   }
   return result;
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useMikroTik } from '../../context/MikroTikContext';
+import { useRouterTelemetry, useSubscribersState, useMikroTikActions } from '../../context/MikroTikContext';
 import { ActiveHotspotUser } from '../../types/mikrotik';
 import { formatBytes, formatBps } from '../../lib/formatters';
 import { safeStorage } from '../../utils/safeStorage';
@@ -92,14 +92,9 @@ function playSpikeAlertSound() {
 }
 
 export const BandwidthAnalyticsSpikesMonitor: React.FC<BandwidthAnalyticsSpikesMonitorProps> = () => {
-  const {
-    interfaces,
-    activeUsers,
-    kickUser,
-    addQueue,
-    syncNow,
-    showToast
-  } = useMikroTik();
+  const { interfaces } = useRouterTelemetry();
+  const { activeUsers } = useSubscribersState();
+  const { kickUser, addQueue, syncNow, showToast } = useMikroTikActions();
 
   const [activeTab, setActiveTab] = useState<'wan_traffic' | 'top_consumers' | 'spikes_analytics'>('wan_traffic');
   const [spikeThresholdMbps, setSpikeThresholdMbps] = useState<number>(10);

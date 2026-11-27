@@ -7,6 +7,7 @@ import { auditLog } from '../auditLog';
 import { MikrotikAPI } from '../mikrotik-api';
 import { securityConfig } from '../security-shield';
 import { isProtectedDefaultProfileName } from '../routeros/profileSanitizer';
+import { appLogger } from '../rotatingLogger';
 
 export class RouterProfileController {
   private static async resolveClient(req: Request): Promise<any> {
@@ -24,7 +25,9 @@ export class RouterProfileController {
       if (typeof client.ensureConnected === 'function') {
         try {
           await client.ensureConnected();
-        } catch {}
+        } catch (err: any) {
+          appLogger.warn('RouterProfileController', 'resolveClient ensureConnected failed', { error: err?.message });
+        }
       }
     }
     return client;
@@ -32,8 +35,11 @@ export class RouterProfileController {
 
   static async create(req: Request, res: Response) {
     const client = await RouterProfileController.resolveClient(req);
-    if (!client || (typeof client.isConnected === 'function' && !client.isConnected())) {
-      return res.status(401).json({ success: false, message: 'سيرفر المايكروتك غير متصل حالياً' });
+    if (!client) {
+      return res.status(401).json({ success: false, code: 'SESSION_INVALID', sessionExpired: true, message: 'الجلسة غير صالحة أو منتهية' });
+    }
+    if (typeof client.isConnected === 'function' && !client.isConnected()) {
+      return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
     }
 
     const { serviceType, profileData } = req.body;
@@ -88,8 +94,11 @@ export class RouterProfileController {
 
   static async update(req: Request, res: Response) {
     const client = await RouterProfileController.resolveClient(req);
-    if (!client || (typeof client.isConnected === 'function' && !client.isConnected())) {
-      return res.status(401).json({ success: false, message: 'سيرفر المايكروتك غير متصل حالياً' });
+    if (!client) {
+      return res.status(401).json({ success: false, code: 'SESSION_INVALID', sessionExpired: true, message: 'الجلسة غير صالحة أو منتهية' });
+    }
+    if (typeof client.isConnected === 'function' && !client.isConnected()) {
+      return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
     }
 
     const { serviceType, oldName, profileData } = req.body;
@@ -146,8 +155,11 @@ export class RouterProfileController {
 
   static async delete(req: Request, res: Response) {
     const client = await RouterProfileController.resolveClient(req);
-    if (!client || (typeof client.isConnected === 'function' && !client.isConnected())) {
-      return res.status(401).json({ success: false, message: 'سيرفر المايكروتك غير متصل حالياً' });
+    if (!client) {
+      return res.status(401).json({ success: false, code: 'SESSION_INVALID', sessionExpired: true, message: 'الجلسة غير صالحة أو منتهية' });
+    }
+    if (typeof client.isConnected === 'function' && !client.isConnected()) {
+      return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
     }
 
     const { serviceType, profileName } = req.body;

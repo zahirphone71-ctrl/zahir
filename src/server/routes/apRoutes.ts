@@ -38,7 +38,7 @@ export function createApRoutes(getClient?: (req: Request) => any): Router {
       if (apSource === 'capsman') {
         const client = getRouterClient(req);
         if (!client?.isConnected?.()) {
-          return res.status(401).json({ success: false, message: 'الراوتر غير متصل' });
+          return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
         }
         const info = await fetchCapsManInfo(client, apMac);
         return res.json(info);
@@ -92,7 +92,7 @@ export function createApRoutes(getClient?: (req: Request) => any): Router {
       if (apSource === 'capsman') {
         const client = getRouterClient(req);
         if (!client?.isConnected?.()) {
-          return res.status(401).json({ success: false, message: 'الراوتر غير متصل' });
+          return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
         }
 
         // إصلاح 8: تحذير تأخير التطبيق للـ CAPs

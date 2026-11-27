@@ -111,12 +111,12 @@ export const TOKENS = Object.freeze({
   // ═══ الأبعاد (بالبكسل) ═══
   dim: Object.freeze({
     button: Object.freeze({
-      sm: Object.freeze({ h: 32, px: 12, font: 11, icon: 14, gap: 6 }),
+      sm: Object.freeze({ h: 32, px: 12, font: 12, icon: 14, gap: 6 }),
       md: Object.freeze({ h: 40, px: 16, font: 13, icon: 16, gap: 8 }),
       lg: Object.freeze({ h: 48, px: 24, font: 15, icon: 20, gap: 10 }),
     }),
     input: Object.freeze({
-      sm: Object.freeze({ h: 32, px: 10, font: 11 }),
+      sm: Object.freeze({ h: 32, px: 10, font: 12 }),
       md: Object.freeze({ h: 40, px: 12, font: 13 }),
       lg: Object.freeze({ h: 48, px: 14, font: 15 }),
     }),
@@ -133,8 +133,8 @@ export const TOKENS = Object.freeze({
     modal: Object.freeze({ headerH: 64, footerH: 56, p: 20, radius: 16 }),
     table: Object.freeze({ rowH: 48, headerH: 44, cellPx: 12, font: 12 }),
     badge: Object.freeze({
-      sm: Object.freeze({ h: 20, px: 8, font: 10 }),
-      md: Object.freeze({ h: 24, px: 10, font: 11 }),
+      sm: Object.freeze({ h: 20, px: 8, font: 12 }),
+      md: Object.freeze({ h: 24, px: 10, font: 12 }),
     }),
     toast: Object.freeze({ h: 48, px: 16, font: 12, radius: 12 }),
     avatar: Object.freeze({ sm: 24, md: 32, lg: 40, xl: 48 }),
@@ -147,8 +147,8 @@ export const TOKENS = Object.freeze({
   // ═══ الخطوط ═══
   font: Object.freeze({
     size: Object.freeze({
-      xs: '10px',
-      sm: '11px',
+      xs: '12px',
+      sm: '12px',
       base: '12px',
       md: '13px',
       lg: '14px',
@@ -166,9 +166,9 @@ export const TOKENS = Object.freeze({
       black: 900,
     }),
     family: Object.freeze({
-      ui: "'Tajawal', sans-serif",
-      mono: "'JetBrains Mono', monospace",
-      display: "'Cairo', sans-serif",
+      ui: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
+      mono: "'JetBrains Mono Variable', 'JetBrains Mono', monospace",
+      display: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     }),
   }),
 

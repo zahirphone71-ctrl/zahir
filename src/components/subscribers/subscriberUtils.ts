@@ -1371,7 +1371,7 @@ export function mapHotspotUserToRow(user: any, activeNames: Set<string>, profile
   const profileObj = Array.isArray(profiles) ? profiles.find((p) => p.name === user.profile) : undefined;
   const status = getHotspotUserStatus(user, activeNames, profileObj);
   return {
-    id: user['.id'] || user.id || user.name || `hs-${Math.random()}`,
+    id: user['.id'] || user.id || user.name || `hs-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
     name: user.name || '',
     password: user.password || '',
     profile: user.profile || 'default',

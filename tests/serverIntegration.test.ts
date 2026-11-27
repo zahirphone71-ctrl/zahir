@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
 
 function getAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -105,7 +106,7 @@ describe('Production Bundle (dist/server.cjs) Live HTTP & Security Integration',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ host: '127.0.0.1', port: 1, username: '' })
     });
-    assert.equal(missingUserRes.status, 200);
+    assert.equal(missingUserRes.status, 400);
     const missingUserJson: any = await missingUserRes.json();
     assert.equal(missingUserJson.success, false);
 
@@ -139,15 +140,40 @@ describe('Production Bundle (dist/server.cjs) Live HTTP & Security Integration',
     assert.equal(typeof diagJson.diagnostic?.latencyMs, 'number');
   });
 
-  it('allows CORS for local/Electron origins and blocks untrusted third-party origins', async () => {
+  it('allows CORS for own loopback origin and blocks untrusted origins including evil.web.app and bad Host headers', async () => {
+    const ownOrigin = `http://localhost:${testPort}`;
     const localRes = await fetch(`${baseUrl}/api/ping`, {
-      headers: { Origin: 'http://localhost:3000' }
+      headers: { Origin: ownOrigin }
     });
-    assert.equal(localRes.headers.get('access-control-allow-origin'), 'http://localhost:3000');
+    assert.equal(localRes.headers.get('access-control-allow-origin'), ownOrigin);
+
+    const evilWebAppRes = await fetch(`${baseUrl}/api/ping`, {
+      headers: { Origin: 'https://evil.web.app' }
+    });
+    assert.equal(evilWebAppRes.headers.get('access-control-allow-origin'), null);
 
     const badRes = await fetch(`${baseUrl}/api/ping`, {
       headers: { Origin: 'https://untrusted-attacker.example.com' }
     });
     assert.equal(badRes.headers.get('access-control-allow-origin'), null);
+
+    const dnsRebindRes = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: testPort,
+          path: '/api/ping',
+          method: 'GET',
+          headers: { Host: 'evil-rebind.attacker:3000' }
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode || 0);
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(dnsRebindRes, 421);
   });
 });

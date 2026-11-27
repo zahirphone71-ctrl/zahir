@@ -1,22 +1,25 @@
 {
   "appId": "com.zctrl.mikrotik",
   "productName": "ZCtrl",
-  "asar": false,
+  "asar": true,
+  "asarUnpack": [
+    "dist/server.cjs"
+  ],
   "directories": {
     "output": "dist-electron",
-    "buildResources": "build"
+    "buildResources": "assets"
   },
   "files": [
     "dist/**/*",
     "electron-main.cjs",
+    "electron-preload.cjs",
     "package.json",
-    "build/**/*",
-    "public/**/*",
-    "icon.ico",
-    "icon.png"
+    "assets/**/*",
+    "public/**/*"
   ],
   "win": {
-    "icon": "build/icon.ico",
+    "icon": "assets/icon.ico",
+    "verifyUpdateCodeSignature": true,
     "target": [
       {
         "target": "nsis",
@@ -34,8 +37,8 @@
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "ZCtrl",
-    "installerIcon": "build/icon.ico",
-    "uninstallerIcon": "build/icon.ico",
-    "installerHeaderIcon": "build/installerHeaderIcon.ico"
+    "installerIcon": "assets/icon.ico",
+    "uninstallerIcon": "assets/icon.ico",
+    "installerHeaderIcon": "assets/icon.ico"
   }
 }

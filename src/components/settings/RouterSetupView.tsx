@@ -64,6 +64,7 @@ export const RouterSetupView: React.FC = () => {
     wanIp: '192.168.1.20/24',
     gateway: '192.168.1.1',
     radiusSecret: '2026',
+    webPrivateUsername: 'zctrl_admin',
     timeZone: 'Asia/Riyadh'
   });
 
@@ -97,7 +98,10 @@ export const RouterSetupView: React.FC = () => {
         signal: controller.signal
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json().catch((err) => {
+        console.warn('Invalid JSON from router setup endpoint:', err);
+        return {};
+      });
       if (!isMountedRef.current) return;
 
       const normalized: CheckResult = {
@@ -150,11 +154,11 @@ export const RouterSetupView: React.FC = () => {
             </div>
             <div>
               <div className="font-bold text-slate-200">{router.name || 'MikroTik Router'}</div>
-              <div className="text-[11px] text-slate-400">{router.host} • إصدار {router.version || 'RouterOS'}</div>
+              <div className="text-xs text-slate-400">{router.host} • إصدار {router.version || 'RouterOS'}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-400 font-bold text-[11px] border border-emerald-500/30">
+            <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-400 font-bold text-xs border border-emerald-500/30">
               متصل ومصادق كمدير
             </span>
           </div>
@@ -168,13 +172,13 @@ export const RouterSetupView: React.FC = () => {
             <Layers className="w-4 h-4 text-blue-400" />
             <span>معايير الضبط التلقائي للشبكة</span>
           </h3>
-          <span className="text-[11px] text-slate-500">قابلة للتعديل حسب شبكتك</span>
+          <span className="text-xs text-slate-400">قابلة للتعديل حسب شبكتك</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* WAN Interface */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <Network className="w-3.5 h-3.5 text-blue-400" />
               <span>منفذ الإنترنت (WAN)</span>
             </label>
@@ -184,14 +188,14 @@ export const RouterSetupView: React.FC = () => {
               value={config.wanInterface} 
               onChange={handleChange} 
               placeholder="ether1"
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" 
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors" 
               dir="ltr"
             />
           </div>
 
           {/* LAN Bridge */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <Server className="w-3.5 h-3.5 text-emerald-400" />
               <span>بريدج الخروج (LAN Bridge)</span>
             </label>
@@ -201,14 +205,14 @@ export const RouterSetupView: React.FC = () => {
               value={config.lanBridge} 
               onChange={handleChange} 
               placeholder="bridge1"
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" 
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors" 
               dir="ltr"
             />
           </div>
 
           {/* Wi-Fi SSID */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <Wifi className="w-3.5 h-3.5 text-amber-400" />
               <span>اسم شبكة الواي فاي (SSID)</span>
             </label>
@@ -218,13 +222,13 @@ export const RouterSetupView: React.FC = () => {
               value={config.ssid} 
               onChange={handleChange} 
               placeholder="شبكتي - Hotspot"
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" 
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors" 
             />
           </div>
 
           {/* WAN IP */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <Network className="w-3.5 h-3.5 text-purple-400" />
               <span>آي بي الإنترنت للراوتر (WAN IP)</span>
             </label>
@@ -234,14 +238,14 @@ export const RouterSetupView: React.FC = () => {
               value={config.wanIp} 
               onChange={handleChange} 
               placeholder="192.168.1.20/24"
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" 
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors" 
               dir="ltr"
             />
           </div>
 
           {/* Gateway */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5 text-yellow-400" />
               <span>بوابة الراوتر للمودم (Gateway)</span>
             </label>
@@ -251,14 +255,14 @@ export const RouterSetupView: React.FC = () => {
               value={config.gateway} 
               onChange={handleChange} 
               placeholder="192.168.1.1"
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" 
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors" 
               dir="ltr"
             />
           </div>
 
           {/* Radius Secret */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5 text-rose-400" />
               <span>كلمة سر الراديوس المشتركة</span>
             </label>
@@ -268,14 +272,31 @@ export const RouterSetupView: React.FC = () => {
               value={config.radiusSecret} 
               onChange={handleChange} 
               placeholder="2026"
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" 
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors" 
+              dir="ltr"
+            />
+          </div>
+
+          {/* Configurable web-private-username */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-emerald-400" />
+              <span>اسم مستخدم الإدارة الخاص (web-private)</span>
+            </label>
+            <input 
+              type="text" 
+              name="webPrivateUsername" 
+              value={config.webPrivateUsername} 
+              onChange={handleChange} 
+              placeholder="zctrl_admin"
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors font-mono" 
               dir="ltr"
             />
           </div>
 
           {/* Time Zone */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-cyan-400" />
               <span>المنطقة الزمنية (Time Zone)</span>
             </label>
@@ -283,7 +304,7 @@ export const RouterSetupView: React.FC = () => {
               name="timeZone"
               value={config.timeZone}
               onChange={handleChange}
-              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500 transition-colors"
+              className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 transition-colors"
               dir="ltr"
             >
               <option value="Asia/Riyadh">Asia/Riyadh (+03:00)</option>
@@ -341,7 +362,7 @@ export const RouterSetupView: React.FC = () => {
           type="button"
           onClick={() => setShowConfirmModal(true)}
           disabled={loading || !isConnected}
-          className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-950/40 disabled:opacity-50 cursor-pointer mr-auto"
+          className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-950/40 disabled:opacity-50 cursor-pointer ms-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
         >
           {loading && action === 'apply' ? (
             <RefreshCw className="w-4 h-4 animate-spin text-white" />
@@ -372,7 +393,7 @@ export const RouterSetupView: React.FC = () => {
                   {results.message}
                 </h4>
                 {results.summary && (
-                  <p className="text-[11px] text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-400 mt-0.5">
                     اكتملت {results.summary.ok} من أصل {results.summary.total} عناصر فحص أساسية
                   </p>
                 )}
@@ -380,7 +401,7 @@ export const RouterSetupView: React.FC = () => {
             </div>
 
             {results.summary && (
-              <div className="text-left shrink-0">
+              <div className="text-end shrink-0">
                 <span className={`text-sm font-black ${
                   progressPercent === 100 ? 'text-emerald-400' : progressPercent >= 70 ? 'text-amber-400' : 'text-rose-400'
                 }`}>
@@ -404,7 +425,7 @@ export const RouterSetupView: React.FC = () => {
 
           {/* Detailed items */}
           {results.details && results.details.length > 0 && (
-            <div className="space-y-2 mt-4 max-h-80 overflow-y-auto pr-1">
+            <div className="space-y-2 mt-4 max-h-80 overflow-y-auto pe-1">
               {results.details.map((detail, idx) => (
                 <div 
                   key={idx} 
@@ -419,17 +440,17 @@ export const RouterSetupView: React.FC = () => {
                     <div className="min-w-0">
                       <div className="font-bold text-slate-200 flex items-center gap-2">
                         <span>{detail.name}</span>
-                        <span className="text-[10px] font-normal px-1.5 py-0.2 bg-slate-800 text-slate-400 rounded">
+                        <span className="text-xs font-normal px-1.5 py-0.5 bg-slate-800 text-slate-400 rounded">
                           {detail.category}
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                      <p className="text-xs text-slate-400 mt-0.5 truncate">
                         {detail.message}
                       </p>
                     </div>
                   </div>
 
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold shrink-0 ${
                     detail.status === 'ok' 
                       ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' 
                       : 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
@@ -460,11 +481,12 @@ export const RouterSetupView: React.FC = () => {
               </p>
             </div>
 
-            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1">
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-1">
               <div className="font-bold text-amber-400">القيم التي سيتم ضبطها:</div>
               <div>• البريدج: <span className="text-white font-mono">{config.lanBridge}</span></div>
               <div>• آي بي الدخول: <span className="text-white font-mono">10.0.0.1/22</span></div>
               <div>• اسم الواي فاي: <span className="text-white">{config.ssid}</span></div>
+              <div>• حساب الإدارة الخاص: <span className="text-white font-mono">{config.webPrivateUsername}</span></div>
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-2">

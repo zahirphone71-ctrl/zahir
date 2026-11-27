@@ -37,15 +37,22 @@ export async function secureFetch(input: RequestInfo | URL, init?: RequestInit):
     customHeaders.set('X-Router-Token', routerToken);
   }
 
+  if (!customHeaders.has('X-Requested-With')) {
+    customHeaders.set('X-Requested-With', 'XMLHttpRequest');
+  }
+
   const baseUrl = getApiBaseUrl();
   let finalInput = input;
   if (baseUrl && typeof input === 'string' && input.startsWith('/')) {
     finalInput = `${baseUrl}${input}`;
   }
 
+  const credentials = init?.credentials ?? 'same-origin';
+
   try {
     return await fetch(finalInput, {
       ...init,
+      credentials,
       headers: customHeaders
     });
   } catch (err: any) {
@@ -54,6 +61,7 @@ export async function secureFetch(input: RequestInfo | URL, init?: RequestInit):
       safeStorage.removeItem('zahir_api_url');
       return fetch(input, {
         ...init,
+        credentials,
         headers: customHeaders
       });
     }

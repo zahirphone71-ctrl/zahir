@@ -10,6 +10,7 @@ export interface RouterConnection {
   useSsl: boolean;
   strictTls?: boolean;
   tlsFingerprint?: string;
+  acceptTlsFingerprint?: boolean;
   operatorUsername?: string;
   operatorPassword?: string;
   version: string;
@@ -274,7 +275,9 @@ export interface SimpleQueue {
   bytesOut?: number;
   bytesTotal?: number;
   packets: string;
+  rate?: string;
   disabled: boolean;
+  dynamic?: boolean;
   priority: string;
   burstLimit?: string;
   burstThreshold?: string;

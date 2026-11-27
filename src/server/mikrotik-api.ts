@@ -2,6 +2,27 @@ import net from "net";
 import tls from "tls";
 import crypto from "crypto";
 import { AutoPingStabilizer } from "./ping-stabilizer.ts";
+import { tlsPinStore, type TlsPinStore } from "./tlsPinStore.ts";
+import { appLogger } from "./rotatingLogger.ts";
+
+export class TlsPinningError extends Error {
+  public readonly code: "TLS_FINGERPRINT_MISMATCH" | "TLS_UNTRUSTED_TOFU" | "TLS_MISSING_CERT";
+  public readonly actualFingerprint?: string;
+  public readonly pinnedFingerprint?: string;
+
+  constructor(
+    code: "TLS_FINGERPRINT_MISMATCH" | "TLS_UNTRUSTED_TOFU" | "TLS_MISSING_CERT",
+    message: string,
+    actualFingerprint?: string,
+    pinnedFingerprint?: string
+  ) {
+    super(message);
+    this.name = "TlsPinningError";
+    this.code = code;
+    this.actualFingerprint = actualFingerprint;
+    this.pinnedFingerprint = pinnedFingerprint;
+  }
+}
 
 export interface ConnectionConfig {
   host: string;
@@ -12,6 +33,8 @@ export interface ConnectionConfig {
   useSsl?: boolean;
   strictTls?: boolean;
   tlsFingerprint?: string;
+  trustOnFirstUse?: boolean;
+  pinStore?: TlsPinStore;
 }
 
 export function normalizeTlsFingerprint(fp: string): string {
@@ -243,11 +266,11 @@ export class MikroTikRequestThrottler {
     }
   }
 
-  getEffectivePacingMs(basePacingMs: number = 15): number {
+  getEffectivePacingMs(basePacingMs: number = 8): number {
     let pacing = basePacingMs;
-    if (this.currentCpuLoad > 75 || this.currentPingMs > 140) {
+    if (this.currentCpuLoad > 85 || this.currentPingMs > 160) {
       pacing = Math.max(pacing, 120);
-    } else if (this.currentCpuLoad > 55 || this.currentPingMs > 70 || this.currentJitterMs > 25) {
+    } else if (this.currentCpuLoad > 75 || this.currentPingMs > 100 || this.currentJitterMs > 35) {
       pacing = Math.max(pacing, 55);
     }
     if (this.overridePacingMs !== null) {
@@ -258,7 +281,7 @@ export class MikroTikRequestThrottler {
 
   private getEffectiveMaxConcurrent(): number {
     let limit = this.maxConcurrent;
-    if (this.currentCpuLoad > 55 || this.currentPingMs > 70 || this.currentJitterMs > 25) {
+    if (this.currentCpuLoad > 75 || this.currentPingMs > 100 || this.currentJitterMs > 35) {
       limit = 1;
     }
     if (this.overrideMaxConcurrent !== null) {
@@ -286,7 +309,7 @@ export class MikroTikRequestThrottler {
   ): Promise<T> {
     const enqueuedAt = Date.now();
     const timeoutMs = options?.timeoutMs || 35000;
-    const pacingDelayMs = this.getEffectivePacingMs(options?.pacingDelayMs ?? 15);
+    const pacingDelayMs = this.getEffectivePacingMs(options?.pacingDelayMs ?? 8);
     const effectiveMax = this.getEffectiveMaxConcurrent();
 
     // إذا كانت هناك مسارات فارغة والطابور خالي، نفذ فوراً
@@ -297,7 +320,7 @@ export class MikroTikRequestThrottler {
     // تجاوز الحد الأقصى -> إدراج في طابور الانتظار التهدوي
     this.totalThrottled++;
     return new Promise<T>((resolve, reject) => {
-      const id = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const id = `req_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
       const timeoutTimer = setTimeout(() => {
         const idx = this.queue.findIndex((item) => item.id === id);
         if (idx !== -1) {
@@ -394,10 +417,14 @@ export class MikrotikClient {
   private routerIdentity: string = "MikroTik";
   private routerBoard: string = "";
   private isConnectedFlag: boolean = false;
+  private isConnectingHandshake: boolean = false;
   private throttler: MikroTikRequestThrottler = new MikroTikRequestThrottler(2);
   private pingStabilizer: AutoPingStabilizer = new AutoPingStabilizer();
   private lastErrorMessage: string = "";
-  private buffer: Buffer = Buffer.alloc(0);
+  private static readonly MAX_RECV_BUFFER_BYTES = 64 * 1024 * 1024;
+  private static readonly MAX_SENTENCES_PER_REQUEST = 100_000;
+  private chunks: Buffer[] = [];
+  private bufLen: number = 0;
   private inProgressWords: string[] = [];
   private pendingRequests: Map<string, PendingCommand> = new Map();
   private tagCounter: number = 0;
@@ -464,17 +491,33 @@ export class MikrotikClient {
   syncStabilizerToThrottler(): void {
     const snap = this.pingStabilizer.getSnapshot();
     const rec = this.pingStabilizer.getRecommendedThrottling();
+    // Feed ONLY real ICMP Ping EWMA & jitter into throttler — never conflate API socket RTT!
+    const icmpPingForControl = snap.samplesCount > 0 ? snap.ewmaPingMs : 0;
     this.throttler.updateNetworkMetrics(
-      snap.ewmaPingMs || this.lastSocketLatencyMs,
-      snap.jitterMs,
+      icmpPingForControl,
+      snap.samplesCount > 0 ? snap.jitterMs : 0,
       rec.maxConcurrent,
       rec.pacingMs
     );
   }
 
+  getApiLatency(): number {
+    return this.lastSocketLatencyMs;
+  }
+
   getLatency(): number {
-    const ewma = this.pingStabilizer.getSnapshot().ewmaPingMs;
-    return ewma > 0 ? ewma : this.lastSocketLatencyMs;
+    const snap = this.pingStabilizer.getSnapshot();
+    return snap.samplesCount > 0 && snap.ewmaPingMs > 0 ? snap.ewmaPingMs : this.lastSocketLatencyMs;
+  }
+
+  recordIcmpPingSample(pingMs: number, packetLoss?: number): void {
+    if (typeof pingMs === "number" && Number.isFinite(pingMs) && pingMs > 0) {
+      this.pingStabilizer.recordSample({
+        pingMs,
+        packetLoss: typeof packetLoss === "number" && Number.isFinite(packetLoss) ? packetLoss : undefined
+      });
+      this.syncStabilizerToThrottler();
+    }
   }
 
   updateHardwareMetrics(cpuLoad?: number, temperature?: number, pingMs?: number) {
@@ -504,9 +547,8 @@ export class MikrotikClient {
   isThermalStressed(): boolean {
     const stabState = this.pingStabilizer.getSnapshot().state;
     return (
-      this.isEcoModeActive ||
-      this.currentCpuLoad > 55 ||
-      this.currentTemperature > 58 ||
+      this.currentCpuLoad > 75 ||
+      this.currentTemperature > 62 ||
       stabState === "stabilizing" ||
       stabState === "critical"
     );
@@ -599,18 +641,53 @@ export class MikrotikClient {
   }
 
   /**
-   * فك تشفير وتجميع الجمل الواردة من المايكروتك من مجرى البايتات
+   * فك تشفير وتجميع الجمل الواردة من المايكروتك من مجرى البايتات بكفاءة O(N) وسقف ذاكرة آمن
    */
   private parseIncomingData() {
+    if (this.bufLen <= 0 || this.chunks.length === 0) return;
+
     // حماية ذاكرة الوصول العشوائي RAM ضد المخازن التالفة أو الضخمة
-    if (this.buffer.length > 32 * 1024 * 1024) {
-      console.warn("MikrotikClient: Buffer exceeded 32MB safety limit, resetting buffer to protect RAM.");
-      this.buffer = Buffer.alloc(0);
+    if (this.bufLen > MikrotikClient.MAX_RECV_BUFFER_BYTES) {
+      console.warn("MikrotikClient: Receive buffer exceeded 64MB safety limit, resetting socket to protect RAM.");
+      const err = new Error("تجاوز مخزن استقبال المقبس الحد الأقصى (64MB)");
+      this.chunks = [];
+      this.bufLen = 0;
       this.inProgressWords = [];
+      if (this.socket && !this.socket.destroyed) {
+        this.socket.destroy(err);
+      }
       return;
     }
 
-    const buf = this.buffer;
+    // Fast-path: if waiting on a multi-chunk single large word, defer Buffer.concat until enough bytes arrive
+    if (this.chunks.length > 1 && this.chunks[0].length >= 1) {
+      const first = this.chunks[0];
+      const b1 = first[0];
+      let headerBytes = 1;
+      let expectedWordLen = 0;
+      let known = false;
+      if ((b1 & 0x80) === 0) {
+        expectedWordLen = b1;
+        known = true;
+      } else if ((b1 & 0xc0) === 0x80 && first.length >= 2) {
+        headerBytes = 2;
+        expectedWordLen = ((b1 & 0x3f) << 8) | first[1];
+        known = true;
+      } else if ((b1 & 0xe0) === 0xc0 && first.length >= 3) {
+        headerBytes = 3;
+        expectedWordLen = ((b1 & 0x1f) << 16) | (first[1] << 8) | first[2];
+        known = true;
+      } else if ((b1 & 0xf0) === 0xe0 && first.length >= 4) {
+        headerBytes = 4;
+        expectedWordLen = (((b1 & 0x0f) * 0x1000000) + ((first[1] << 16) | (first[2] << 8) | first[3])) >>> 0;
+        known = true;
+      }
+      if (known && expectedWordLen > 0 && expectedWordLen <= 32 * 1024 * 1024 && this.bufLen < headerBytes + expectedWordLen) {
+        return;
+      }
+    }
+
+    const buf = this.chunks.length === 1 ? this.chunks[0] : Buffer.concat(this.chunks, this.bufLen);
     const len = buf.length;
     let cursor = 0;
 
@@ -682,6 +759,28 @@ export class MikrotikClient {
           }
 
           if (targetPending) {
+            if (
+              sentenceType !== "!done" &&
+              sentenceType !== "!fatal" &&
+              sentenceType !== "!halt" &&
+              targetPending.sentences.length >= MikrotikClient.MAX_SENTENCES_PER_REQUEST
+            ) {
+              if (targetPending.timeoutTimer) {
+                clearTimeout(targetPending.timeoutTimer);
+                targetPending.timeoutTimer = null;
+              }
+              if (targetPending.tag) {
+                this.pendingRequests.delete(targetPending.tag);
+              }
+              targetPending.sentences.length = 0;
+              targetPending.reject(
+                new Error(
+                  `تجاوز الرد الحد الأقصى لعدد الجمل (${MikrotikClient.MAX_SENTENCES_PER_REQUEST} سجل). يرجى استخدام التصفية لتقليل حجم البيانات.`
+                )
+              );
+              continue;
+            }
+
             targetPending.sentences.push(words);
 
             if (sentenceType === "!done" || sentenceType === "!fatal" || sentenceType === "!halt") {
@@ -719,11 +818,17 @@ export class MikrotikClient {
       cursor = offset + wordLen;
     }
 
-    // اقتطاع البايتات المقروءة دفعة واحدة أو تحرير المخزن فورا عند خلوه
+    // تحرير البايتات المقروءة فورا دون إبقاء مراجع لـ Buffer كبير في الذاكرة
     if (cursor >= len) {
-      this.buffer = Buffer.alloc(0);
+      this.chunks = [];
+      this.bufLen = 0;
     } else if (cursor > 0) {
-      this.buffer = buf.subarray(cursor);
+      const rem = Buffer.from(buf.subarray(cursor));
+      this.chunks = [rem];
+      this.bufLen = rem.length;
+    } else {
+      this.chunks = [buf];
+      this.bufLen = buf.length;
     }
   }
 
@@ -844,6 +949,8 @@ export class MikrotikClient {
     return results;
   }
 
+  private lastConnectError: Error | null = null;
+
   /**
    * الاتصال بالراوتر والمصادقة الحقيقية (تدعم RouterOS v5, v6, v6.43+, v7)
    */
@@ -853,7 +960,12 @@ export class MikrotikClient {
     password?: string,
     port = 8728,
     useSsl = false,
-    options?: { strictTls?: boolean; tlsFingerprint?: string }
+    options?: {
+      strictTls?: boolean;
+      tlsFingerprint?: string;
+      trustOnFirstUse?: boolean;
+      pinStore?: TlsPinStore;
+    }
   ): Promise<boolean> {
     await this.disconnect();
 
@@ -864,8 +976,10 @@ export class MikrotikClient {
         password: password || "",
         port: Number(port) || (useSsl ? 8729 : 8728),
         useSsl: !!useSsl,
-        strictTls: !!options?.strictTls,
+        strictTls: options?.strictTls !== undefined ? Boolean(options.strictTls) : true,
         tlsFingerprint: options?.tlsFingerprint?.trim() || undefined,
+        trustOnFirstUse: options?.trustOnFirstUse,
+        pinStore: options?.pinStore,
         timeout: 10
       };
     } else {
@@ -875,16 +989,22 @@ export class MikrotikClient {
         password: configOrHost.password || "",
         port: Number(configOrHost.port) || (configOrHost.useSsl ? 8729 : 8728),
         useSsl: !!configOrHost.useSsl,
-        strictTls: !!configOrHost.strictTls,
+        strictTls: configOrHost.strictTls !== undefined ? Boolean(configOrHost.strictTls) : true,
         tlsFingerprint: configOrHost.tlsFingerprint?.trim() || undefined,
+        trustOnFirstUse: configOrHost.trustOnFirstUse,
+        pinStore: configOrHost.pinStore,
         timeout: configOrHost.timeout || 10
       };
     }
 
     this.reconnectFailures = 0;
     this.nextReconnectAllowedAt = 0;
+    this.lastConnectError = null;
     const connected = await this.ensureConnected({ bypassBackoff: true });
     if (!connected) {
+      if (this.lastConnectError instanceof TlsPinningError) {
+        throw this.lastConnectError;
+      }
       throw new Error(
         this.lastErrorMessage ||
           "فشل الاتصال بالراوتر. يرجى التحقق من الشبكة وعنوان IP وبيانات المدير (Admin) الصحيحة."
@@ -918,9 +1038,11 @@ export class MikrotikClient {
     }
 
     this.connectionPromise = (async () => {
+      this.isConnectingHandshake = true;
       try {
         await this.performSocketConnect();
         this.lastErrorMessage = "";
+        this.lastConnectError = null;
         this.reconnectFailures = 0;
         this.nextReconnectAllowedAt = 0;
         this.totalReconnectCount++;
@@ -932,9 +1054,11 @@ export class MikrotikClient {
         this.reconnectFailures = Math.min(this.reconnectFailures + 1, 6);
         const backoffMs = Math.min(30000, 1000 * Math.pow(2, this.reconnectFailures - 1));
         this.nextReconnectAllowedAt = Date.now() + backoffMs;
+        this.lastConnectError = err instanceof Error ? err : new Error(String(err));
         this.lastErrorMessage = err?.message || "فشل الاتصال بسيرفر المايكروتك";
         return false;
       } finally {
+        this.isConnectingHandshake = false;
         this.connectionPromise = null;
       }
     })();
@@ -951,8 +1075,10 @@ export class MikrotikClient {
 
       const host = this.currentConfig!.host;
       const useSsl = !!this.currentConfig!.useSsl;
-      const strictTls = !!this.currentConfig!.strictTls;
+      const strictTls = this.currentConfig!.strictTls !== false;
       const expectedFingerprint = this.currentConfig!.tlsFingerprint;
+      const trustOnFirstUse = Boolean(this.currentConfig!.trustOnFirstUse);
+      const pinStore = this.currentConfig!.pinStore || tlsPinStore;
       const port = this.currentConfig!.port || (useSsl ? 8729 : 8728);
       const user = this.currentConfig!.user;
       const password = this.currentConfig!.password || "";
@@ -961,10 +1087,12 @@ export class MikrotikClient {
 
       let socket: net.Socket;
       if (useSsl) {
+        // Perform handshake with rejectUnauthorized:false and verify SHA-256 fingerprint
+        // via TOFU / Pin Store inside secureConnect BEFORE any credentials are transmitted.
         socket = tls.connect({
           host,
           port,
-          rejectUnauthorized: strictTls,
+          rejectUnauthorized: false,
           timeout: timeoutMs
         }) as unknown as net.Socket;
       } else {
@@ -973,7 +1101,8 @@ export class MikrotikClient {
       }
 
       this.socket = socket;
-      this.buffer = Buffer.alloc(0);
+      this.chunks = [];
+      this.bufLen = 0;
       this.inProgressWords = [];
 
       let isHandshakeComplete = false;
@@ -1018,7 +1147,16 @@ export class MikrotikClient {
       });
 
       socket.on("data", (chunk: Buffer) => {
-        this.buffer = Buffer.concat([this.buffer, chunk]);
+        this.chunks.push(chunk);
+        this.bufLen += chunk.length;
+        if (this.bufLen > MikrotikClient.MAX_RECV_BUFFER_BYTES) {
+          const sizeErr = new Error("تجاوز مخزن استقبال المقبس الحد الأقصى (64MB)");
+          this.chunks = [];
+          this.bufLen = 0;
+          this.inProgressWords = [];
+          socket.destroy(sizeErr);
+          return;
+        }
         this.parseIncomingData();
       });
 
@@ -1030,21 +1168,73 @@ export class MikrotikClient {
             const actualFingerprint = peerCert?.fingerprint256 ? String(peerCert.fingerprint256) : "";
             this.peerTlsFingerprint = actualFingerprint || null;
 
-            if (expectedFingerprint && !verifyTlsFingerprint(expectedFingerprint, actualFingerprint)) {
+            const certText = (v: string | string[] | undefined): string | undefined =>
+              Array.isArray(v) ? v[0] : v;
+            const pinKey = `mikrotik:${host}:${port}`;
+            const verifyResult = pinStore.verifyOrTofu(pinKey, actualFingerprint, {
+              expectedFingerprint,
+              strictTls,
+              trustOnFirstUse,
+              subject: certText(peerCert?.subject?.CN),
+              issuer: certText(peerCert?.issuer?.CN)
+            });
+
+            if (!verifyResult.ok) {
               clearTimeout(connectTimer);
               socket.destroy();
-              return reject(
-                new Error(
-                  `تم رفض اتصال API-SSL: بصمة شهادة TLS (${actualFingerprint || "غير متوفرة"}) لا تطابق البصمة المثبتة.`
-                )
-              );
+              if (verifyResult.reason === "mismatch") {
+                appLogger.error("security", "MikroTik API-SSL TLS fingerprint mismatch detected", {
+                  host,
+                  port,
+                  expected: verifyResult.pinnedFingerprint,
+                  actual: actualFingerprint
+                });
+                return reject(
+                  new TlsPinningError(
+                    "TLS_FINGERPRINT_MISMATCH",
+                    `تم رفض اتصال API-SSL: بصمة شهادة TLS (${actualFingerprint || "غير متوفرة"}) لا تطابق البصمة المثبتة (${verifyResult.pinnedFingerprint || ""}).`,
+                    actualFingerprint,
+                    verifyResult.pinnedFingerprint
+                  )
+                );
+              }
+              if (verifyResult.reason === "untrusted_tofu") {
+                if (tlsSocket.authorized) {
+                  // CA-signed certificate verified by OS/Node root store
+                  pinStore.setPin(pinKey, actualFingerprint, {
+                    subject: certText(peerCert?.subject?.CN),
+                    issuer: certText(peerCert?.issuer?.CN)
+                  });
+                } else {
+                  return reject(
+                    new TlsPinningError(
+                      "TLS_UNTRUSTED_TOFU",
+                      `شهادة API-SSL للراوتر غير موثوقة بعد. يرجى التحقق من بصمة SHA-256 والموافقة على تثبيتها قبل إرسال بيانات الدخول.`,
+                      actualFingerprint
+                    )
+                  );
+                }
+              } else {
+                return reject(
+                  new TlsPinningError(
+                    "TLS_MISSING_CERT",
+                    "لم يقدم الراوتر شهادة TLS صالحة للتحقق منها."
+                  )
+                );
+              }
             }
           } catch (certErr: any) {
-            if (expectedFingerprint) {
-              clearTimeout(connectTimer);
-              socket.destroy();
-              return reject(new Error(`تعذر التحقق من بصمة شهادة TLS: ${certErr?.message || "خطأ غير معروف"}`));
+            clearTimeout(connectTimer);
+            socket.destroy();
+            if (certErr instanceof TlsPinningError) {
+              return reject(certErr);
             }
+            return reject(
+              new TlsPinningError(
+                "TLS_MISSING_CERT",
+                `تعذر التحقق من بصمة شهادة TLS: ${certErr?.message || "خطأ غير معروف"}`
+              )
+            );
           }
         }
 
@@ -1130,7 +1320,13 @@ export class MikrotikClient {
 
           isHandshakeComplete = true;
           clearTimeout(connectTimer);
-          try { socket.setTimeout(0); } catch {}
+          try {
+            socket.setTimeout(0);
+          } catch (err) {
+            appLogger.warn("mikrotik-api", "Failed to clear socket timeout after handshake", {
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
 
           // 3. جلب معلومات الراوتر الأساسية وتحديد الإصدار تلقائياً دفعة واحدة وبسرعة
           try {
@@ -1222,10 +1418,15 @@ export class MikrotikClient {
       try {
         this.socket.removeAllListeners();
         this.socket.destroy();
-      } catch {}
+      } catch (err) {
+        appLogger.warn("mikrotik-api", "Socket cleanup warning", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       this.socket = null;
     }
-    this.buffer = Buffer.alloc(0);
+    this.chunks = [];
+    this.bufLen = 0;
   }
 
   /**
@@ -1255,7 +1456,8 @@ export class MikrotikClient {
    */
   async dispose(): Promise<void> {
     await this.disconnect(true);
-    this.buffer = Buffer.alloc(0);
+    this.chunks = [];
+    this.bufLen = 0;
     this.inProgressWords = [];
     this.pendingRequests.clear();
     this.throttler.clearQueue();
@@ -1292,6 +1494,9 @@ export class MikrotikClient {
     const executePromise = this.throttler.execute(
       async (): Promise<any[]> => {
         if (!this.isConnected()) {
+          if (this.isConnectingHandshake) {
+            throw new Error(this.lastErrorMessage || "انقطع الاتصال أثناء المصافحة مع الراوتر.");
+          }
           const reconnected = await this.ensureConnected();
           if (!reconnected) {
             throw new Error(
@@ -1301,15 +1506,15 @@ export class MikrotikClient {
         }
 
         // درع الحماية الذكية لمعالج وذاكرة وبـينج المايكروتك:
-        // يضبط الفاصل الزمني تلقائياً حسب ضغط المعالج وتذبذب البينج لمنع ارتفاع CPU أو Ping Spikes
+        // يضبط الفاصل الزمني تلقائياً عند الضغط المرتفع فقط لمنع تراكم الطابور عند الأحمال الطبيعية
         const stabPacing = this.pingStabilizer.getRecommendedThrottling().pacingMs;
         if (this.lastQueryTime > 0) {
           const elapsed = Date.now() - this.lastQueryTime;
-          let targetPacing = Math.max(18, stabPacing);
-          if (this.isThermalStressed() || (this.currentCpuLoad && this.currentCpuLoad > 55)) {
+          let targetPacing = Math.max(8, stabPacing);
+          if (this.isThermalStressed() || (this.currentCpuLoad && this.currentCpuLoad > 75)) {
             targetPacing = Math.max(targetPacing, 65);
           } else if (options?.rapid || isMutation) {
-            targetPacing = Math.min(targetPacing, 15);
+            targetPacing = Math.min(targetPacing, 8);
           }
           if (elapsed < targetPacing) {
             await new Promise((resolve) => setTimeout(resolve, targetPacing - elapsed));
@@ -1334,7 +1539,7 @@ export class MikrotikClient {
           }
         }
 
-        // Only lightweight single-row endpoints reflect true socket RTT (bulk /print queries must not distort Ping!)
+        // Lightweight endpoints update internal API RTT display ONLY (never fed into PingStabilizer!)
         const isLightweightPingEndpoint =
           endpoint === "/system/resource/print" ||
           endpoint === "/system/identity/print" ||
@@ -1354,18 +1559,18 @@ export class MikrotikClient {
           if (this.rttSamples.length > 40) this.rttSamples.shift();
           if (isLightweightPingEndpoint) {
             this.lastSocketLatencyMs = durationMs;
-            this.pingStabilizer.recordSample({ pingMs: durationMs });
-            this.syncStabilizerToThrottler();
           }
           return this.parseResponseSentences(sentences);
         } catch (error: any) {
           this.lastQueryTime = Date.now();
           const message = (error?.message || "").toLowerCase();
-          const isNetworkIssue = ["socket", "closed", "timeout", "not connected", "econnrefused", "reset", "مهلة"].some(
+          // Real socket disconnect ONLY — timeouts must NOT destroy active sockets or reject sibling queries!
+          const isNetworkIssue = ["socket", "closed", "econnrefused", "reset", "not connected"].some(
             (term) => message.includes(term)
           );
+          const canRetry = !isMutation && endpoint.endsWith("/print");
 
-          if (isNetworkIssue) {
+          if (isNetworkIssue && canRetry && !this.isConnectingHandshake) {
             this.isConnectedFlag = false;
             this.cleanupSocket();
             const reconnected = await this.ensureConnected();
@@ -1378,8 +1583,6 @@ export class MikrotikClient {
               if (this.rttSamples.length > 40) this.rttSamples.shift();
               if (isLightweightPingEndpoint) {
                 this.lastSocketLatencyMs = retryDur;
-                this.pingStabilizer.recordSample({ pingMs: retryDur });
-                this.syncStabilizerToThrottler();
               }
               return this.parseResponseSentences(retrySentences);
             }
@@ -1394,18 +1597,20 @@ export class MikrotikClient {
         pacingDelayMs: this.isThermalStressed()
           ? Math.max(60, this.pingStabilizer.getRecommendedThrottling().pacingMs)
           : options?.rapid || isMutation
-          ? 12
-          : Math.max(18, this.pingStabilizer.getRecommendedThrottling().pacingMs)
+          ? 8
+          : Math.max(8, this.pingStabilizer.getRecommendedThrottling().pacingMs)
       }
     );
 
     if (dedupKey) {
       this.inFlightReads.set(dedupKey, executePromise);
-      executePromise.finally(() => {
-        if (this.inFlightReads.get(dedupKey) === executePromise) {
-          this.inFlightReads.delete(dedupKey);
-        }
-      });
+      executePromise
+        .finally(() => {
+          if (this.inFlightReads.get(dedupKey) === executePromise) {
+            this.inFlightReads.delete(dedupKey);
+          }
+        })
+        .catch(() => {});
     }
 
     return executePromise;

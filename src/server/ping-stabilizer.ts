@@ -5,6 +5,8 @@
 //  - Optional RouterOS QoS Fast-Lane (ICMP / DNS / TCP ACK Priority 1)
 // ============================================================
 
+import crypto from "crypto";
+
 export type PingStabilizerMode = "auto" | "aggressive" | "balanced" | "off";
 export type PingStabilizerState = "optimal" | "elevated" | "stabilizing" | "critical";
 
@@ -38,7 +40,20 @@ export interface RouterQosFastLaneStatus {
   fastLanePackets: number;
   fastLaneBytes: number;
   prioritizeManagementApi: boolean;
+  interfaceList?: string;
+  maxLimit?: string;
   checkedAt: number | null;
+}
+
+export interface RouterQosRulePreview {
+  id: string;
+  table: "mangle" | "queue_tree";
+  chain: string;
+  action: string;
+  target: string;
+  description: string;
+  command: string;
+  params: string[];
 }
 
 export interface PingStabilizerSnapshot {
@@ -78,6 +93,8 @@ export class AutoPingStabilizer {
   private autoQosEnabled: boolean = false;
 
   private state: PingStabilizerState = "optimal";
+  private pendingState: PingStabilizerState | null = null;
+  private pendingStateCount: number = 0;
   private currentPingMs: number = 0;
   private ewmaPingMs: number = 0;
   private minPingMs: number = 0;
@@ -90,8 +107,8 @@ export class AutoPingStabilizer {
   private updatedAt: number = Date.now();
 
   private recommendedMaxConcurrent: number = 2;
-  private recommendedPacingMs: number = 20;
-  private recommendedWsIntervalMs: number = 5000;
+  private recommendedPacingMs: number = 8;
+  private recommendedWsIntervalMs: number = 7500;
   private recommendedSyncIntervalSec: number = 60;
   private suppressHeavyTelemetry: boolean = false;
 
@@ -213,6 +230,9 @@ export class AutoPingStabilizer {
   }
 
   resetStats(): PingStabilizerSnapshot {
+    this.state = "optimal";
+    this.pendingState = null;
+    this.pendingStateCount = 0;
     this.currentPingMs = 0;
     this.ewmaPingMs = 0;
     this.minPingMs = 0;
@@ -275,9 +295,11 @@ export class AutoPingStabilizer {
 
     if (this.mode === "off") {
       this.state = "optimal";
+      this.pendingState = null;
+      this.pendingStateCount = 0;
       this.recommendedMaxConcurrent = 2;
-      this.recommendedPacingMs = 15;
-      this.recommendedWsIntervalMs = 5000;
+      this.recommendedPacingMs = 8;
+      this.recommendedWsIntervalMs = 7500;
       this.recommendedSyncIntervalSec = 60;
       this.suppressHeavyTelemetry = false;
       return;
@@ -285,32 +307,49 @@ export class AutoPingStabilizer {
 
     const effectivePing = this.samplesCount > 0 ? Math.max(this.ewmaPingMs, Math.round(this.currentPingMs * 0.85)) : 0;
     const target = this.mode === "aggressive" ? Math.max(15, Math.round(this.targetPingMs * 0.75)) : this.targetPingMs;
-    const cpuLimit = this.mode === "aggressive" ? Math.max(40, this.maxCpuThreshold - 10) : this.maxCpuThreshold;
+    const cpuLimit = this.mode === "aggressive" ? Math.max(50, this.maxCpuThreshold - 5) : this.maxCpuThreshold;
 
-    let nextState: PingStabilizerState = "optimal";
+    let candidateState: PingStabilizerState = "optimal";
 
     if (
       effectivePing >= target * 2.8 ||
       this.packetLossPercent >= 20 ||
-      this.cpuLoad >= Math.min(90, cpuLimit + 25) ||
+      this.cpuLoad >= Math.min(92, cpuLimit + 25) ||
       this.cpuTemp >= 72
     ) {
-      nextState = "critical";
+      candidateState = "critical";
     } else if (
       effectivePing >= target * 1.65 ||
       this.jitterMs >= 35 ||
       this.packetLossPercent >= 10 ||
-      this.cpuLoad >= Math.min(82, cpuLimit + 10) ||
+      this.cpuLoad >= Math.min(84, cpuLimit + 12) ||
       this.cpuTemp >= 64
     ) {
-      nextState = "stabilizing";
+      candidateState = "stabilizing";
     } else if (
       effectivePing > target ||
       this.jitterMs >= 18 ||
       this.cpuLoad >= cpuLimit ||
       this.cpuTemp >= 58
     ) {
-      nextState = "elevated";
+      candidateState = "elevated";
+    }
+
+    // Hysteresis: require 3 consecutive readings in the same candidate direction before changing state
+    let nextState = this.state;
+    if (candidateState === this.state) {
+      this.pendingState = null;
+      this.pendingStateCount = 0;
+    } else if (this.pendingState === candidateState) {
+      this.pendingStateCount += 1;
+      if (this.pendingStateCount >= 3) {
+        nextState = candidateState;
+        this.pendingState = null;
+        this.pendingStateCount = 0;
+      }
+    } else {
+      this.pendingState = candidateState;
+      this.pendingStateCount = 1;
     }
 
     this.state = nextState;
@@ -319,29 +358,29 @@ export class AutoPingStabilizer {
       switch (nextState) {
         case "critical":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 200;
+          this.recommendedPacingMs = 150;
           this.recommendedWsIntervalMs = 25000;
           this.recommendedSyncIntervalSec = 240;
           this.suppressHeavyTelemetry = true;
           break;
         case "stabilizing":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 120;
+          this.recommendedPacingMs = 95;
           this.recommendedWsIntervalMs = 16000;
           this.recommendedSyncIntervalSec = 180;
           this.suppressHeavyTelemetry = true;
           break;
         case "elevated":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 65;
+          this.recommendedPacingMs = 45;
           this.recommendedWsIntervalMs = 10000;
           this.recommendedSyncIntervalSec = 120;
           this.suppressHeavyTelemetry = true;
           break;
         default:
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 30;
-          this.recommendedWsIntervalMs = 6500;
+          this.recommendedPacingMs = 15;
+          this.recommendedWsIntervalMs = 7500;
           this.recommendedSyncIntervalSec = 90;
           this.suppressHeavyTelemetry = false;
           break;
@@ -350,29 +389,29 @@ export class AutoPingStabilizer {
       switch (nextState) {
         case "critical":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 150;
+          this.recommendedPacingMs = 120;
           this.recommendedWsIntervalMs = 20000;
           this.recommendedSyncIntervalSec = 180;
           this.suppressHeavyTelemetry = true;
           break;
         case "stabilizing":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 80;
+          this.recommendedPacingMs = 60;
           this.recommendedWsIntervalMs = 12000;
           this.recommendedSyncIntervalSec = 120;
           this.suppressHeavyTelemetry = true;
           break;
         case "elevated":
           this.recommendedMaxConcurrent = 2;
-          this.recommendedPacingMs = 40;
-          this.recommendedWsIntervalMs = 7500;
+          this.recommendedPacingMs = 25;
+          this.recommendedWsIntervalMs = 9500;
           this.recommendedSyncIntervalSec = 90;
           this.suppressHeavyTelemetry = false;
           break;
         default:
           this.recommendedMaxConcurrent = 2;
-          this.recommendedPacingMs = 18;
-          this.recommendedWsIntervalMs = 5000;
+          this.recommendedPacingMs = 8;
+          this.recommendedWsIntervalMs = 7500;
           this.recommendedSyncIntervalSec = 60;
           this.suppressHeavyTelemetry = false;
           break;
@@ -382,29 +421,29 @@ export class AutoPingStabilizer {
       switch (nextState) {
         case "critical":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 180;
-          this.recommendedWsIntervalMs = 24000;
+          this.recommendedPacingMs = 140;
+          this.recommendedWsIntervalMs = 25000;
           this.recommendedSyncIntervalSec = 240;
           this.suppressHeavyTelemetry = true;
           break;
         case "stabilizing":
           this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 95;
-          this.recommendedWsIntervalMs = 14000;
+          this.recommendedPacingMs = 75;
+          this.recommendedWsIntervalMs = 16000;
           this.recommendedSyncIntervalSec = 150;
           this.suppressHeavyTelemetry = true;
           break;
         case "elevated":
-          this.recommendedMaxConcurrent = 1;
-          this.recommendedPacingMs = 45;
-          this.recommendedWsIntervalMs = 8500;
+          this.recommendedMaxConcurrent = 2;
+          this.recommendedPacingMs = 30;
+          this.recommendedWsIntervalMs = 9500;
           this.recommendedSyncIntervalSec = 100;
           this.suppressHeavyTelemetry = false;
           break;
         default:
           this.recommendedMaxConcurrent = 2;
-          this.recommendedPacingMs = 20;
-          this.recommendedWsIntervalMs = 5000;
+          this.recommendedPacingMs = 8;
+          this.recommendedWsIntervalMs = 7500;
           this.recommendedSyncIntervalSec = 60;
           this.suppressHeavyTelemetry = false;
           break;
@@ -435,7 +474,7 @@ export class AutoPingStabilizer {
 
   private pushAction(message: string): void {
     const entry: PingStabilizerAction = {
-      id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `act_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
       timestamp: Date.now(),
       state: this.state,
       message
@@ -457,7 +496,8 @@ export interface RouterClientLike {
   querySafe(endpoint: string, params?: string[], options?: any): Promise<any[]>;
   getLatency?(): number;
   getPingStabilizer?(): AutoPingStabilizer;
-  updateHardwareMetrics?(cpuLoad?: number, temperature?: number): void;
+  updateHardwareMetrics?(cpuLoad?: number, temperature?: number, pingMs?: number): void;
+  recordIcmpPingSample?(pingMs: number, packetLoss?: number): void;
 }
 
 function parseRouterOsPingTimeMs(raw: any): number | null {
@@ -546,10 +586,16 @@ export async function runActivePingProbe(
   }
   const jitterMs = samples.length > 1 ? Math.round(jitterSum / (samples.length - 1)) : 0;
 
-  if (typeof client.getPingStabilizer === "function") {
-    const stab = client.getPingStabilizer();
-    for (const s of samples) {
-      stab.recordSample({ pingMs: s, packetLoss });
+  if (source === "router_icmp") {
+    if (typeof client.recordIcmpPingSample === "function") {
+      for (const s of samples) {
+        client.recordIcmpPingSample(s, packetLoss);
+      }
+    } else if (typeof client.getPingStabilizer === "function") {
+      const stab = client.getPingStabilizer();
+      for (const s of samples) {
+        stab.recordSample({ pingMs: s, packetLoss });
+      }
     }
   }
 
@@ -565,6 +611,97 @@ export async function runActivePingProbe(
   };
 }
 
+function sanitizeRouterOsListToken(value: string | undefined, fallback: string): string {
+  const cleaned = String(value || "").trim().replace(/[^a-zA-Z0-9._:/-]/g, "");
+  return cleaned || fallback;
+}
+
+export function previewRouterPingFastLaneRules(options?: {
+  prioritizeManagementApi?: boolean;
+  interfaceList?: string;
+  maxLimit?: string;
+}): {
+  interfaceList: string;
+  maxLimit: string;
+  rules: RouterQosRulePreview[];
+} {
+  const prioritizeMgmt = options?.prioritizeManagementApi !== false;
+  const interfaceList = sanitizeRouterOsListToken(options?.interfaceList, "WAN");
+  const maxLimit = sanitizeRouterOsListToken(options?.maxLimit, "10M");
+
+  const rules: RouterQosRulePreview[] = [
+    {
+      id: "ICMP_PRE",
+      table: "mangle",
+      chain: "prerouting",
+      action: "mark-packet",
+      target: ZCTRL_QOS_PACKET_MARK,
+      description: `وسم حزم ICMP الواردة عبر قائمة الواجهات (${interfaceList}) بأولوية البينج`,
+      command: `/ip firewall mangle add chain=prerouting in-interface-list=${interfaceList} protocol=icmp action=mark-packet new-packet-mark=${ZCTRL_QOS_PACKET_MARK} passthrough=no comment="${ZCTRL_QOS_COMMENT_TAG}:ICMP_PRE"`,
+      params: [
+        `in-interface-list=${interfaceList}`,
+        "protocol=icmp",
+        "passthrough=no",
+        `new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`
+      ]
+    },
+    {
+      id: "DNS_UDP",
+      table: "mangle",
+      chain: "prerouting",
+      action: "mark-packet",
+      target: ZCTRL_QOS_PACKET_MARK,
+      description: `وسم استعلامات DNS UDP/53 الواردة عبر (${interfaceList})`,
+      command: `/ip firewall mangle add chain=prerouting in-interface-list=${interfaceList} protocol=udp dst-port=53 action=mark-packet new-packet-mark=${ZCTRL_QOS_PACKET_MARK} passthrough=no comment="${ZCTRL_QOS_COMMENT_TAG}:DNS_UDP"`,
+      params: [
+        `in-interface-list=${interfaceList}`,
+        "protocol=udp",
+        "dst-port=53",
+        "passthrough=no",
+        `new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`
+      ]
+    }
+  ];
+
+  if (prioritizeMgmt) {
+    rules.push({
+      id: "MGMT_API",
+      table: "mangle",
+      chain: "prerouting",
+      action: "mark-packet",
+      target: ZCTRL_QOS_PACKET_MARK,
+      description: `أولوية منافذ إدارة الراوتر (8728,8729,8291) عبر (${interfaceList})`,
+      command: `/ip firewall mangle add chain=prerouting in-interface-list=${interfaceList} protocol=tcp dst-port=8728,8729,8291 action=mark-packet new-packet-mark=${ZCTRL_QOS_PACKET_MARK} passthrough=no comment="${ZCTRL_QOS_COMMENT_TAG}:MGMT_API"`,
+      params: [
+        `in-interface-list=${interfaceList}`,
+        "protocol=tcp",
+        "dst-port=8728,8729,8291",
+        "passthrough=no",
+        `new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`
+      ]
+    });
+  }
+
+  rules.push({
+    id: "QUEUE",
+    table: "queue_tree",
+    chain: "global",
+    action: "priority=1",
+    target: ZCTRL_QOS_QUEUE_NAME,
+    description: `طابور أولوية (Priority 1) بسقف سرعة محدد (${maxLimit}) لمنع استنزاف الشبكة`,
+    command: `/queue tree add name=${ZCTRL_QOS_QUEUE_NAME} parent=global packet-mark=${ZCTRL_QOS_PACKET_MARK} priority=1 max-limit=${maxLimit} queue=default comment="${ZCTRL_QOS_COMMENT_TAG}:QUEUE"`,
+    params: [
+      `name=${ZCTRL_QOS_QUEUE_NAME}`,
+      "parent=global",
+      `packet-mark=${ZCTRL_QOS_PACKET_MARK}`,
+      "priority=1",
+      `max-limit=${maxLimit}`
+    ]
+  });
+
+  return { interfaceList, maxLimit, rules };
+}
+
 export async function getRouterPingFastLaneStatus(client: RouterClientLike): Promise<RouterQosFastLaneStatus> {
   if (!client || !client.isConnected()) {
     return {
@@ -574,6 +711,8 @@ export async function getRouterPingFastLaneStatus(client: RouterClientLike): Pro
       fastLanePackets: 0,
       fastLaneBytes: 0,
       prioritizeManagementApi: true,
+      interfaceList: "WAN",
+      maxLimit: "10M",
       checkedAt: Date.now()
     };
   }
@@ -581,12 +720,12 @@ export async function getRouterPingFastLaneStatus(client: RouterClientLike): Pro
   const [mangles, queues] = await Promise.all([
     client
       .querySafe("/ip/firewall/mangle/print", [
-        ".proplist=.id,comment,disabled,packets,bytes,dst-port"
+        ".proplist=.id,comment,disabled,packets,bytes,dst-port,in-interface-list"
       ], { timeoutSeconds: 5, rapid: true })
       .catch(() => []),
     client
       .querySafe("/queue/tree/print", [
-        ".proplist=.id,name,comment,disabled,packets,bytes"
+        ".proplist=.id,name,comment,disabled,packets,bytes,max-limit"
       ], { timeoutSeconds: 5, rapid: true })
       .catch(() => [])
   ]);
@@ -604,6 +743,8 @@ export async function getRouterPingFastLaneStatus(client: RouterClientLike): Pro
   const fastLanePackets = ourQueues.reduce((sum: number, q: any) => sum + (parseInt(q?.packets || "0", 10) || 0), 0);
   const fastLaneBytes = ourQueues.reduce((sum: number, q: any) => sum + (parseInt(q?.bytes || "0", 10) || 0), 0);
   const hasMgmtRule = ourMangles.some((m: any) => String(m?.comment || "").includes("MGMT_API"));
+  const activeInterfaceList = ourMangles[0]?.["in-interface-list"] || "WAN";
+  const activeMaxLimit = ourQueues[0]?.["max-limit"] || "10M";
 
   const status: RouterQosFastLaneStatus = {
     active: ourMangles.length > 0 && ourQueues.length > 0,
@@ -612,6 +753,8 @@ export async function getRouterPingFastLaneStatus(client: RouterClientLike): Pro
     fastLanePackets,
     fastLaneBytes,
     prioritizeManagementApi: hasMgmtRule || ourMangles.length === 0,
+    interfaceList: activeInterfaceList,
+    maxLimit: activeMaxLimit,
     checkedAt: Date.now()
   };
 
@@ -624,13 +767,15 @@ export async function getRouterPingFastLaneStatus(client: RouterClientLike): Pro
 
 export async function applyRouterPingFastLane(
   client: RouterClientLike,
-  options?: { prioritizeManagementApi?: boolean }
+  options?: { prioritizeManagementApi?: boolean; interfaceList?: string; maxLimit?: string }
 ): Promise<{ success: boolean; createdRules: number; status: RouterQosFastLaneStatus; message: string }> {
   if (!client || !client.isConnected()) {
     throw new Error("الراوتر غير متصل حالياً لتطبيق مسار أولوية البينج.");
   }
 
   const prioritizeMgmt = options?.prioritizeManagementApi !== false;
+  const interfaceList = sanitizeRouterOsListToken(options?.interfaceList, "WAN");
+  const maxLimit = sanitizeRouterOsListToken(options?.maxLimit, "10M");
 
   // Inspect existing rules first for 100% idempotency
   const [existingMangles, existingQueues] = await Promise.all([
@@ -642,11 +787,13 @@ export async function applyRouterPingFastLane(
     (Array.isArray(existingMangles) ? existingMangles : []).map((m: any) => String(m?.comment || ""))
   );
 
+  // Scoped safe mangle rules: bound to interfaceList and EXCLUDING global TCP ACK or duplicate ICMP_POST
   const desiredMangleRules: Array<{ comment: string; params: string[] }> = [
     {
       comment: `${ZCTRL_QOS_COMMENT_TAG}:ICMP_PRE`,
       params: [
         "=chain=prerouting",
+        `=in-interface-list=${interfaceList}`,
         "=protocol=icmp",
         "=action=mark-packet",
         `=new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`,
@@ -655,39 +802,16 @@ export async function applyRouterPingFastLane(
       ]
     },
     {
-      comment: `${ZCTRL_QOS_COMMENT_TAG}:ICMP_POST`,
-      params: [
-        "=chain=postrouting",
-        "=protocol=icmp",
-        "=action=mark-packet",
-        `=new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`,
-        "=passthrough=no",
-        `=comment=${ZCTRL_QOS_COMMENT_TAG}:ICMP_POST`
-      ]
-    },
-    {
       comment: `${ZCTRL_QOS_COMMENT_TAG}:DNS_UDP`,
       params: [
         "=chain=prerouting",
+        `=in-interface-list=${interfaceList}`,
         "=protocol=udp",
         "=dst-port=53",
         "=action=mark-packet",
         `=new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`,
         "=passthrough=no",
         `=comment=${ZCTRL_QOS_COMMENT_TAG}:DNS_UDP`
-      ]
-    },
-    {
-      comment: `${ZCTRL_QOS_COMMENT_TAG}:TCP_ACK`,
-      params: [
-        "=chain=prerouting",
-        "=protocol=tcp",
-        "=tcp-flags=ack",
-        "=packet-size=0-128",
-        "=action=mark-packet",
-        `=new-packet-mark=${ZCTRL_QOS_PACKET_MARK}`,
-        "=passthrough=no",
-        `=comment=${ZCTRL_QOS_COMMENT_TAG}:TCP_ACK`
       ]
     }
   ];
@@ -697,6 +821,7 @@ export async function applyRouterPingFastLane(
       comment: `${ZCTRL_QOS_COMMENT_TAG}:MGMT_API`,
       params: [
         "=chain=prerouting",
+        `=in-interface-list=${interfaceList}`,
         "=protocol=tcp",
         "=dst-port=8728,8729,8291",
         "=action=mark-packet",
@@ -728,6 +853,7 @@ export async function applyRouterPingFastLane(
         "=parent=global",
         `=packet-mark=${ZCTRL_QOS_PACKET_MARK}`,
         "=priority=1",
+        `=max-limit=${maxLimit}`,
         "=queue=default",
         `=comment=${ZCTRL_QOS_COMMENT_TAG}:QUEUE`
       ],
@@ -743,7 +869,7 @@ export async function applyRouterPingFastLane(
     status,
     message:
       createdRules > 0
-        ? `تم تفعيل مسار أولوية البينج بالراوتر بنجاح (Priority 1 لحزم ICMP و DNS و TCP ACK — ${createdRules} قواعد جديدة)`
+        ? `تم تفعيل مسار أولوية البينج على واجهة (${interfaceList}) بسقف (${maxLimit}) بنجاح (${createdRules} قواعد جديدة)`
         : "مسار أولوية البينج (QoS Fast-Lane) مُفعّل بالفعل على الراوتر"
   };
 }

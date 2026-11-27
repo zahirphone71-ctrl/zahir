@@ -3,6 +3,7 @@
 // ============================================================
 
 import { httpRequest, parseJson, extractFromHtml, extractCookie, buildUrl } from '../httpUtil.ts';
+import { logger } from '../logger.ts';
 import type {
   VendorHandler,
   VendorResult,
@@ -152,7 +153,9 @@ export const genericHandler: VendorHandler = {
       if (res.status === 200 || res.status === 302) {
         return { success: true, message: 'تم إرسال أمر تغيير SSID (CGI)' };
       }
-    } catch {}
+    } catch (err: any) {
+      logger.warn('GenericAP', 'فشل محاولة تغيير SSID عبر CGI', err?.message);
+    }
 
     // محاولة 2: POST JSON عام
     try {
@@ -172,7 +175,9 @@ export const genericHandler: VendorHandler = {
           return { success: true, message: 'تم تغيير SSID (JSON API)' };
         }
       }
-    } catch {}
+    } catch (err: any) {
+      logger.warn('GenericAP', 'فشل محاولة تغيير SSID عبر JSON API', err?.message);
+    }
 
     return { success: false, message: 'تعذر تغيير SSID تلقائياً - استخدم لوحة التحكم اليدوية للجهاز' };
   },

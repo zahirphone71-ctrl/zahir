@@ -4,7 +4,7 @@ import { VoucherProfile, PrintLayoutOption, GenerateResponse, VoucherDesignState
 import { VoucherCardPreview } from "./VoucherCardPreview";
 import { DraggableVoucherCardCanvas } from "./DraggableVoucherCardCanvas";
 import { buildAutoLoginQrUrl } from "./qrUtils";
-import { GridResult } from "./gridCalculator";
+import { getPaperSpec, GridResult } from "./gridCalculator";
 
 interface LiveVoucherPreviewProps {
   design?: VoucherDesignState;
@@ -236,7 +236,7 @@ export const LiveVoucherPreview: React.FC<LiveVoucherPreviewProps> = ({
           <span>
             {lastResult 
               ? `معاينة وطباعة وحقن الكروت (${lastResult.totalGenerated} كرت)`
-              : "معاينة شكل ورقة الطباعة (عينات تجريبية A4)"}
+              : `معاينة شكل ورقة الطباعة (عينات تجريبية ${getPaperSpec(design?.paperType, design?.paperOrientation).paperLabel})`}
           </span>
         </button>
       </div>

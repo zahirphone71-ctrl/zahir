@@ -77,7 +77,9 @@ export class ErrorBoundary extends Component<Props, State> {
         ta.select();
         document.execCommand('copy');
         ta.remove();
-      } catch {}
+      } catch (copyErr) {
+        logger.warn(`Fallback clipboard copy failed: ${String(copyErr)}`, 'ErrorBoundary');
+      }
     }
     if (!this._isMounted) return;
     this.setState({ copied: true });
@@ -95,7 +97,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="max-w-xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-6 h-6 text-rose-400 animate-pulse" />
+                <AlertTriangle className="w-6 h-6 text-rose-400" />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-white">
@@ -111,7 +113,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-4 font-mono text-xs text-rose-300 overflow-x-auto max-h-48 custom-scrollbar">
                 <p className="font-bold mb-1 text-rose-400">{this.state.error.name}: {this.state.error.message}</p>
                 {this.state.error.stack && (
-                  <pre className="text-[10px] text-slate-500 whitespace-pre-wrap leading-relaxed">
+                  <pre className="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">
                     {this.state.error.stack.slice(0, 500)}...
                   </pre>
                 )}
@@ -122,7 +124,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 type="button"
                 onClick={this.handleReset}
-                className="flex-1 min-w-[140px] px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2"
+                className="flex-1 min-w-[140px] px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 <RefreshCw className="w-4 h-4" />
                 <span>إعادة المحاولة والمتابعة</span>
@@ -131,7 +133,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 type="button"
                 onClick={this.handleReload}
-                className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all border border-slate-700 flex items-center justify-center gap-2"
+                className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all border border-slate-700 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 <Home className="w-4 h-4" />
                 <span>إعادة تحميل الصفحة</span>
@@ -140,8 +142,9 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 type="button"
                 onClick={this.handleCopyError}
-                className="p-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-all border border-slate-700/60"
+                className="p-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-slate-100 transition-all border border-slate-700/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 title="نسخ تفاصيل الخطأ"
+                aria-label="نسخ تفاصيل الخطأ"
               >
                 {this.state.copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
               </button>

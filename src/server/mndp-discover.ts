@@ -2,6 +2,7 @@ import os from "os";
 import net from "net";
 import dgram from "dgram";
 import fs from "fs";
+import { appLogger } from "./rotatingLogger";
 
 export interface DiscoveredMikrotik {
   id: string;
@@ -187,7 +188,9 @@ export async function discoverMikrotikRouters(timeoutMs = 1500): Promise<Discove
         setTimeout(() => {
           try {
             socket?.close();
-          } catch {}
+          } catch (err: any) {
+            appLogger.warn('MNDP', 'Socket close warning', { error: err?.message });
+          }
           resolve();
         }, timeoutMs);
       } catch {

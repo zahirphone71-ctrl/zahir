@@ -1,6 +1,10 @@
 import http from 'http';
 import https from 'https';
+import net from 'net';
+import tls from 'tls';
 import crypto from 'crypto';
+import { tlsPinStore, type TlsPinStore } from '../tlsPinStore.ts';
+import { appLogger } from '../rotatingLogger.ts';
 
 export interface HttpRequestOptions {
   method?: string;
@@ -10,6 +14,10 @@ export interface HttpRequestOptions {
   followRedirects?: boolean;
   maxRedirects?: number;
   signal?: AbortSignal;
+  strictTls?: boolean;
+  tlsFingerprint?: string;
+  trustOnFirstUse?: boolean;
+  pinStore?: TlsPinStore;
 }
 
 export interface HttpResponse {
@@ -18,20 +26,12 @@ export interface HttpResponse {
   body: string;
 }
 
-// Agent pool with keepAlive for socket reuse & performance
+// Agent pool with keepAlive for HTTP socket reuse & performance
 const httpAgent = new http.Agent({
   keepAlive: true,
   maxSockets: 4,
   timeout: 10000,
   keepAliveMsecs: 5000
-});
-
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 4,
-  timeout: 10000,
-  keepAliveMsecs: 5000,
-  rejectUnauthorized: false // Allow self-signed certificates on APs
 });
 
 export function buildUrl(urlStr: string): URL {
@@ -72,28 +72,126 @@ export function httpRequest(urlStr: string, opts: HttpRequestOptions = {}): Prom
         ac.abort();
       }, timeoutMs);
 
-      const agent = targetUrl.protocol === 'https:' ? httpsAgent : httpAgent;
+      const isHttps = targetUrl.protocol === 'https:';
+      const targetPort = Number(targetUrl.port) || (isHttps ? 443 : 80);
 
-      const reqOpts: http.RequestOptions = {
+      const reqOpts: https.RequestOptions = {
         protocol: targetUrl.protocol,
         hostname: targetUrl.hostname,
-        port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
+        port: targetPort,
         path: targetUrl.pathname + targetUrl.search,
         method: opts.method || 'GET',
         headers: {
-          'Connection': 'keep-alive',
+          'Connection': isHttps ? 'close' : 'keep-alive',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
           ...opts.headers
         },
-        agent,
+        agent: isHttps ? undefined : httpAgent,
         timeout: timeoutMs + 2000
       };
 
+      if (isHttps) {
+        const pinStore = opts.pinStore || tlsPinStore;
+        const strictTls = opts.strictTls !== false;
+        const trustOnFirstUse = opts.trustOnFirstUse === true;
+        const pinnedAgent = new https.Agent({ keepAlive: false, rejectUnauthorized: false });
+        pinnedAgent.createConnection = ((_options: any, onCreated?: (err: Error | null, socket?: any) => void) => {
+          const sock = tls.connect({
+            host: targetUrl.hostname,
+            port: targetPort,
+            servername: net.isIP(targetUrl.hostname) ? undefined : targetUrl.hostname,
+            rejectUnauthorized: false,
+            timeout: timeoutMs
+          });
+
+          let settled = false;
+          const finishError = (err: Error) => {
+            if (settled) return;
+            settled = true;
+            try {
+              sock.destroy(err);
+            } catch (sockErr) {
+              appLogger.warn('httpUtil', 'Failed to destroy TLS socket cleanly', {
+                error: sockErr instanceof Error ? sockErr.message : String(sockErr)
+              });
+            }
+            if (onCreated) onCreated(err);
+          };
+
+          const onAbort = () => finishError(new Error('Request aborted during TLS handshake'));
+          ac.signal.addEventListener('abort', onAbort, { once: true });
+
+          sock.once('secureConnect', () => {
+            ac.signal.removeEventListener('abort', onAbort);
+            if (settled) return;
+            try {
+              const peerCert = typeof sock.getPeerCertificate === 'function' ? sock.getPeerCertificate() : null;
+              const actualFp = peerCert?.fingerprint256 ? String(peerCert.fingerprint256) : '';
+              const certText = (v: string | string[] | undefined): string | undefined =>
+                Array.isArray(v) ? v[0] : v;
+              const pinKey = `ap:${targetUrl.hostname}:${targetPort}`;
+              const verifyResult = pinStore.verifyOrTofu(pinKey, actualFp, {
+                expectedFingerprint: opts.tlsFingerprint,
+                strictTls,
+                trustOnFirstUse,
+                subject: certText(peerCert?.subject?.CN),
+                issuer: certText(peerCert?.issuer?.CN)
+              });
+
+              if (!verifyResult.ok) {
+                if (verifyResult.reason === 'untrusted_tofu' && sock.authorized) {
+                  pinStore.setPin(pinKey, actualFp, {
+                    subject: certText(peerCert?.subject?.CN),
+                    issuer: certText(peerCert?.issuer?.CN)
+                  });
+                } else {
+                  const errMsg =
+                    verifyResult.reason === 'mismatch'
+                      ? `TLS fingerprint mismatch for ${targetUrl.hostname}:${targetPort} (expected ${verifyResult.pinnedFingerprint || ''}, got ${actualFp})`
+                      : `Untrusted TLS certificate for ${targetUrl.hostname}:${targetPort} (${actualFp || 'missing'})`;
+                  if (verifyResult.reason === 'mismatch') {
+                    appLogger.error('security', 'AP HTTPS TLS fingerprint mismatch detected', {
+                      host: targetUrl.hostname,
+                      port: targetPort,
+                      expected: verifyResult.pinnedFingerprint,
+                      actual: actualFp
+                    });
+                  }
+                  const err: any = new Error(errMsg);
+                  err.code = verifyResult.reason === 'mismatch' ? 'TLS_FINGERPRINT_MISMATCH' : 'TLS_UNTRUSTED_TOFU';
+                  err.actualFingerprint = actualFp;
+                  err.pinnedFingerprint = verifyResult.pinnedFingerprint;
+                  finishError(err);
+                  return;
+                }
+              }
+
+              settled = true;
+              if (onCreated) onCreated(null, sock);
+            } catch (err: any) {
+              finishError(err);
+            }
+          });
+
+          sock.once('error', (err) => {
+            ac.signal.removeEventListener('abort', onAbort);
+            finishError(err);
+          });
+
+          return undefined as any;
+        }) as typeof pinnedAgent.createConnection;
+        reqOpts.agent = pinnedAgent;
+      }
+
       try {
         (reqOpts as any).signal = ac.signal;
-      } catch {}
+      } catch (signalErr) {
+        appLogger.warn('httpUtil', 'Failed to bind AbortSignal to HTTP request options', {
+          error: signalErr instanceof Error ? signalErr.message : String(signalErr)
+        });
+      }
 
-      const reqModule = targetUrl.protocol === 'https:' ? https : http;
+      const reqModule = isHttps ? https : http;
 
       const req = reqModule.request(reqOpts, (res) => {
         if (aborted) {

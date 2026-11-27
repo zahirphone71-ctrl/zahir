@@ -5,6 +5,7 @@
 // ============================================================
 
 import { AsyncLocalStorage } from "async_hooks";
+import v8 from "node:v8";
 import type { Request } from "express";
 import {
   MikrotikAPI as MikrotikAPI_Original,
@@ -15,6 +16,13 @@ import { getDeviceNameFromCache, queueMacForLookup } from "./oui-lookup.ts";
 import { securityConfig, resolveRequestToken } from "./security-shield.ts";
 import type { OperatorRole } from "./rbac.ts";
 import { voucherDb } from "./voucher-db.ts";
+import { deleteRouterMutex, clearRouterLocks } from "./mutex.ts";
+import { appLogger } from "./rotatingLogger.ts";
+import {
+  sanitizeRouterInput,
+  normalizeDhcpLeaseRow,
+  normalizeSimpleQueueRow
+} from "./utils/routerNormalizers.ts";
 
 export interface ClientSession {
   client: any;
@@ -38,6 +46,13 @@ export function getLatestActiveClient(): any {
 export function setLatestActiveClient(client: any): void {
   latestActiveClient = client;
 }
+export function touchRouterSession(token?: string): void {
+  if (!token) return;
+  const session = routerClients.get(token);
+  if (session) {
+    session.lastSeen = Date.now();
+  }
+}
 
 // ==========================================
 // Bounded Memory Cache & Rate Trackers
@@ -45,64 +60,143 @@ export function setLatestActiveClient(client: any): void {
 interface CacheEntry {
   data: any;
   timestamp: number;
+  rowCount: number;
+  estimatedBytes: number;
+}
+
+function estimateCacheEntryBytes(data: any, rowCount: number): number {
+  if (Array.isArray(data)) {
+    if (rowCount === 0) return 64;
+    const sampleCount = Math.min(3, data.length);
+    let sampleBytes = 0;
+    for (let i = 0; i < sampleCount; i++) {
+      try {
+        sampleBytes += JSON.stringify(data[i])?.length || 128;
+      } catch {
+        sampleBytes += 256;
+      }
+    }
+    const avgRowBytes = Math.max(96, Math.round(sampleBytes / sampleCount) * 2);
+    return rowCount * avgRowBytes;
+  }
+  try {
+    return Math.max(128, (JSON.stringify(data)?.length || 128) * 2);
+  } catch {
+    return 1024;
+  }
 }
 
 export class SafeCache {
   private cache: Map<string, CacheEntry> = new Map();
+  private totalRows = 0;
+  private totalEstimatedBytes = 0;
   private readonly MAX_ENTRIES = 500;
+  private readonly MAX_TOTAL_ROWS = 100_000;
+  private readonly MAX_ENTRY_ROWS = 20_000;
+  private readonly MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+
+  private deleteEntry(key: string): void {
+    const existing = this.cache.get(key);
+    if (!existing) return;
+    this.totalRows = Math.max(0, this.totalRows - existing.rowCount);
+    this.totalEstimatedBytes = Math.max(0, this.totalEstimatedBytes - existing.estimatedBytes);
+    this.cache.delete(key);
+  }
 
   get(key: string, durationMs: number) {
     const entry = this.cache.get(key);
     if (entry && Date.now() - entry.timestamp < durationMs) {
+      // True LRU: refresh key position as most recently used
+      this.cache.delete(key);
+      this.cache.set(key, entry);
       return entry.data;
     }
     if (entry) {
-      this.cache.delete(key);
+      this.deleteEntry(key);
     }
     return null;
   }
 
-  set(key: string, data: any) {
-    if (this.cache.size >= this.MAX_ENTRIES) {
-      const firstKey = this.cache.keys().next().value;
-      if (firstKey) this.cache.delete(firstKey);
+  set(key: string, data: any): boolean {
+    const rowCount = Array.isArray(data) ? data.length : 1;
+    // Skip caching oversized lists to avoid pinning multi-megabyte tables in V8 heap
+    if (Array.isArray(data) && rowCount > this.MAX_ENTRY_ROWS) {
+      this.deleteEntry(key);
+      return false;
     }
-    this.cache.set(key, { data, timestamp: Date.now() });
+
+    const estimatedBytes = estimateCacheEntryBytes(data, rowCount);
+    if (estimatedBytes > this.MAX_TOTAL_BYTES) {
+      this.deleteEntry(key);
+      return false;
+    }
+
+    this.deleteEntry(key);
+
+    while (
+      this.cache.size >= this.MAX_ENTRIES ||
+      this.totalRows + rowCount > this.MAX_TOTAL_ROWS ||
+      (this.totalEstimatedBytes + estimatedBytes > this.MAX_TOTAL_BYTES && this.cache.size > 0)
+    ) {
+      const lruKey = this.cache.keys().next().value;
+      if (!lruKey) break;
+      this.deleteEntry(lruKey);
+    }
+
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now(),
+      rowCount,
+      estimatedBytes
+    });
+    this.totalRows += rowCount;
+    this.totalEstimatedBytes += estimatedBytes;
+    return true;
   }
 
   invalidate(host: string, pattern: string) {
     const prefix = `${host}:`;
-    for (const key of this.cache.keys()) {
+    for (const key of Array.from(this.cache.keys())) {
       if (key.startsWith(prefix) && key.includes(pattern)) {
-        this.cache.delete(key);
+        this.deleteEntry(key);
       }
     }
   }
 
   invalidateDeep(pattern: string) {
     const lower = pattern.toLowerCase();
-    for (const key of this.cache.keys()) {
+    for (const key of Array.from(this.cache.keys())) {
       if (key.toLowerCase().includes(lower)) {
-        this.cache.delete(key);
+        this.deleteEntry(key);
       }
     }
   }
 
   prune() {
     const now = Date.now();
-    for (const [key, entry] of this.cache.entries()) {
+    for (const [key, entry] of Array.from(this.cache.entries())) {
       if (now - entry.timestamp > 120000) {
-        this.cache.delete(key);
+        this.deleteEntry(key);
       }
     }
   }
 
   clear() {
     this.cache.clear();
+    this.totalRows = 0;
+    this.totalEstimatedBytes = 0;
   }
 
   size() {
     return this.cache.size;
+  }
+
+  getStats() {
+    return {
+      entries: this.cache.size,
+      totalRows: this.totalRows,
+      estimatedMb: Math.round((this.totalEstimatedBytes / (1024 * 1024)) * 100) / 100
+    };
   }
 }
 
@@ -141,20 +235,29 @@ const inFlightQueries = new Map<string, Promise<any>>();
 // Periodic cleanup intervals
 const sessionCleanupInterval = setInterval(() => {
   const now = Date.now();
+  const SESSION_MAX_IDLE_MS = 24 * 60 * 60 * 1000;
   for (const [token, session] of routerClients.entries()) {
-    const isSocketAlive =
-      session?.client && typeof session.client.isConnected === "function" && session.client.isConnected();
-    const maxIdleMs = isSocketAlive ? 4 * 60 * 60 * 1000 : 10 * 60 * 1000;
-    if (now - session.lastSeen > maxIdleMs) {
+    if (now - session.lastSeen > SESSION_MAX_IDLE_MS) {
       try {
         if (session.client && typeof session.client.dispose === "function") {
-          session.client.dispose().catch(() => {});
+          session.client.dispose().catch((err: unknown) => {
+            appLogger.warn("runtime", "Expired session dispose warning", {
+              error: err instanceof Error ? err.message : String(err)
+            });
+          });
         } else if (session.client && typeof session.client.disconnect === "function") {
           session.client.disconnect();
         }
-      } catch {}
+      } catch (err) {
+        appLogger.warn("runtime", "Expired session cleanup error", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       if (latestActiveClient === session.client) {
         latestActiveClient = null;
+      }
+      if (session.host) {
+        deleteRouterMutex(session.host);
       }
       routerClients.delete(token);
     }
@@ -200,7 +303,11 @@ const sessionCleanupInterval = setInterval(() => {
   if (typeof (global as any).gc === "function") {
     try {
       (global as any).gc();
-    } catch {}
+    } catch (gcErr) {
+      appLogger.warn("runtime", "Periodic GC invocation failed", {
+        error: gcErr instanceof Error ? gcErr.message : String(gcErr)
+      });
+    }
   }
 }, 5 * 60 * 1000);
 if (sessionCleanupInterval.unref) sessionCleanupInterval.unref();
@@ -210,10 +317,28 @@ if (cachePruneInterval.unref) cachePruneInterval.unref();
 
 // ==========================================
 // Automatic Server Memory Watchdog
-// Prevents gradual RAM buildup under 24/7 operation
+// Dynamic V8 Heap Ratio Thresholds (60% soft, 80% critical)
 // ==========================================
-const MEMORY_SOFT_HEAP_MB = 384;
-const MEMORY_CRITICAL_HEAP_MB = 512;
+function getDynamicHeapThresholdsMb(): { heapLimitMb: number; softMb: number; criticalMb: number } {
+  let limitMb = 512;
+  try {
+    const stats = v8.getHeapStatistics();
+    if (stats?.heap_size_limit && Number.isFinite(stats.heap_size_limit)) {
+      limitMb = stats.heap_size_limit / 1048576;
+    }
+  } catch (err) {
+    appLogger.warn("runtime", "Failed to read V8 heap statistics", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  const heapLimitMb = Math.max(256, Math.round(limitMb * 10) / 10);
+  return {
+    heapLimitMb,
+    softMb: Math.round(heapLimitMb * 0.6 * 10) / 10,
+    criticalMb: Math.round(heapLimitMb * 0.8 * 10) / 10
+  };
+}
+
 let lastWatchdogPruneAt = 0;
 let watchdogPruneCount = 0;
 
@@ -222,10 +347,12 @@ export function getMemoryHealth() {
   const heapUsedMb = Math.round((mem.heapUsed / (1024 * 1024)) * 10) / 10;
   const heapTotalMb = Math.round((mem.heapTotal / (1024 * 1024)) * 10) / 10;
   const rssMb = Math.round((mem.rss / (1024 * 1024)) * 10) / 10;
+  const { heapLimitMb, softMb, criticalMb } = getDynamicHeapThresholdsMb();
+  const cacheStats = queryCache.getStats();
   const status =
-    heapUsedMb >= MEMORY_CRITICAL_HEAP_MB
+    heapUsedMb >= criticalMb
       ? "critical"
-      : heapUsedMb >= MEMORY_SOFT_HEAP_MB
+      : heapUsedMb >= softMb
       ? "elevated"
       : "healthy";
 
@@ -233,13 +360,17 @@ export function getMemoryHealth() {
     status,
     heapUsedMb,
     heapTotalMb,
+    heapLimitMb,
     rssMb,
+    gcAvailable: typeof (global as any).gc === "function",
     thresholdsMb: {
-      soft: MEMORY_SOFT_HEAP_MB,
-      critical: MEMORY_CRITICAL_HEAP_MB
+      soft: softMb,
+      critical: criticalMb
     },
     cacheSizes: {
-      queryCache: queryCache.size(),
+      queryCache: cacheStats.entries,
+      queryCacheRows: cacheStats.totalRows,
+      queryCacheEstimatedMb: cacheStats.estimatedMb,
       activeUserTrackers: activeUserRateTracker.size,
       interfaceTrackers: interfaceRateTracker.size,
       wirelessScans: lastWirelessScanCache.size,
@@ -253,8 +384,9 @@ export function getMemoryHealth() {
 export function runMemoryWatchdogCheck(options?: { forcePrune?: boolean; softThresholdMb?: number; criticalThresholdMb?: number }) {
   const mem = process.memoryUsage();
   const heapUsedMb = mem.heapUsed / (1024 * 1024);
-  const softMb = options?.softThresholdMb ?? MEMORY_SOFT_HEAP_MB;
-  const criticalMb = options?.criticalThresholdMb ?? MEMORY_CRITICAL_HEAP_MB;
+  const dynamic = getDynamicHeapThresholdsMb();
+  const softMb = options?.softThresholdMb ?? dynamic.softMb;
+  const criticalMb = options?.criticalThresholdMb ?? dynamic.criticalMb;
   const forcePrune = Boolean(options?.forcePrune);
 
   let action: "none" | "soft_prune" | "critical_purge" = "none";
@@ -263,6 +395,7 @@ export function runMemoryWatchdogCheck(options?: { forcePrune?: boolean; softThr
     action = "critical_purge";
     queryCache.clear();
     cachedUsermanResult = null;
+    voucherDb.clearMemoryCache();
     lastWirelessScanCache.clear();
     if (activeUserRateTracker.size > 1000) {
       activeUserRateTracker.clear();
@@ -275,7 +408,11 @@ export function runMemoryWatchdogCheck(options?: { forcePrune?: boolean; softThr
     if (typeof (global as any).gc === "function") {
       try {
         (global as any).gc();
-      } catch {}
+      } catch (gcErr) {
+        appLogger.warn("runtime", "Watchdog GC invocation failed", {
+          error: gcErr instanceof Error ? gcErr.message : String(gcErr)
+        });
+      }
     }
   } else if (heapUsedMb >= softMb) {
     action = "soft_prune";
@@ -305,7 +442,11 @@ export function runMemoryWatchdogCheck(options?: { forcePrune?: boolean; softThr
 const memoryWatchdogInterval = setInterval(() => {
   try {
     runMemoryWatchdogCheck();
-  } catch {}
+  } catch (err) {
+    appLogger.warn("runtime", "Memory watchdog check failed", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 }, 60 * 1000);
 if (memoryWatchdogInterval.unref) memoryWatchdogInterval.unref();
 
@@ -319,10 +460,16 @@ export async function destroyRuntimeResources(): Promise<void> {
       if (session.client && typeof session.client.dispose === "function") {
         await session.client.dispose();
       }
-    } catch {}
+    } catch (err) {
+      appLogger.warn("runtime", "Error disposing router client on shutdown", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
   routerClients.clear();
+  clearRouterLocks();
   queryCache.clear();
+  voucherDb.clearMemoryCache();
   activeUserRateTracker.clear();
   interfaceRateTracker.clear();
   lastWirelessScanCache.clear();
@@ -349,7 +496,7 @@ export const resolveRouterClientForWs = (token?: string) => {
   return MikrotikAPI_Original;
 };
 
-export const realtimeSyncServer = new RealtimeSyncServer(resolveRouterClientForWs);
+export const realtimeSyncServer = new RealtimeSyncServer(resolveRouterClientForWs, touchRouterSession);
 
 export const MikrotikAPI = new Proxy(MikrotikAPI_Original, {
   get(target, prop, receiver) {
@@ -396,10 +543,7 @@ export const invalidateCache = (pattern: string, clientOverride?: any) => {
 // ==========================================
 // Sanitizers & Resolvers
 // ==========================================
-export const sanitizeInput = (val: any): string => {
-  if (typeof val !== "string") return typeof val === "number" ? String(val) : "";
-  return val.replace(/[\x00-\x1F\x7F]/g, "").trim();
-};
+export const sanitizeInput = (val: any): string => sanitizeRouterInput(val);
 
 export const getUserManPrefix = (client?: MikrotikClient) =>
   (client || MikrotikAPI).isV6() ? "/tool/user-manager" : "/user-manager";
@@ -414,137 +558,66 @@ export const cleanMikrotikTimeout = (t: any): string | undefined => {
   return s.replace(/\s+/g, "");
 };
 
-export const resolveHotspotProfileId = async (client: any, idOrName: string): Promise<string> => {
+async function resolveRouterEntityId(
+  client: any,
+  endpoint: string,
+  idOrName: string,
+  allowFullScanFallback = true
+): Promise<string> {
   if (!idOrName) return idOrName;
-  const clean = String(idOrName).trim();
-  if (clean.startsWith("*")) return clean;
+  const clean = sanitizeRouterInput(idOrName);
+  if (!clean || clean.startsWith("*")) return clean;
   try {
-    const direct = await client.querySafe("/ip/hotspot/user/profile/print", [`?name=${clean}`], {
+    const direct = await client.querySafe(endpoint, [`?name=${clean}`], {
       timeoutSeconds: 3,
       rapid: true
     });
     if (Array.isArray(direct) && direct.length > 0 && direct[0][".id"]) {
       return direct[0][".id"];
     }
-  } catch {}
-  try {
-    const list = await client.querySafe("/ip/hotspot/user/profile/print", undefined, {
-      timeoutSeconds: 4,
-      rapid: true
+  } catch (err) {
+    appLogger.warn("runtime", `Direct lookup failed for ${endpoint}`, {
+      name: clean,
+      error: err instanceof Error ? err.message : String(err)
     });
+  }
+  if (!allowFullScanFallback) return clean;
+  try {
+    const list = await client.querySafe(endpoint, undefined, { timeoutSeconds: 4, rapid: true });
     if (Array.isArray(list)) {
+      const lowerClean = clean.toLowerCase();
       const match = list.find(
-        (p: any) =>
-          p[".id"] === clean ||
-          p.id === clean ||
-          p.name === clean ||
-          (p.name && p.name.toLowerCase() === clean.toLowerCase())
+        (item: any) =>
+          item?.[".id"] === clean ||
+          item?.id === clean ||
+          item?.name === clean ||
+          (item?.name && String(item.name).toLowerCase() === lowerClean)
       );
       if (match && match[".id"]) return match[".id"];
     }
-  } catch {}
-  return clean;
-};
-
-export const resolvePPPProfileId = async (client: any, idOrName: string): Promise<string> => {
-  if (!idOrName) return idOrName;
-  const clean = String(idOrName).trim();
-  if (clean.startsWith("*")) return clean;
-  try {
-    const direct = await client.querySafe("/ppp/profile/print", [`?name=${clean}`], {
-      timeoutSeconds: 3,
-      rapid: true
+  } catch (err) {
+    appLogger.warn("runtime", `Fallback list scan failed for ${endpoint}`, {
+      name: clean,
+      error: err instanceof Error ? err.message : String(err)
     });
-    if (Array.isArray(direct) && direct.length > 0 && direct[0][".id"]) {
-      return direct[0][".id"];
-    }
-  } catch {}
-  try {
-    const list = await client.querySafe("/ppp/profile/print", undefined, { timeoutSeconds: 4, rapid: true });
-    if (Array.isArray(list)) {
-      const match = list.find(
-        (p: any) =>
-          p[".id"] === clean ||
-          p.id === clean ||
-          p.name === clean ||
-          (p.name && p.name.toLowerCase() === clean.toLowerCase())
-      );
-      if (match && match[".id"]) return match[".id"];
-    }
-  } catch {}
+  }
   return clean;
-};
+}
 
-export const resolveUsermanProfileId = async (client: any, idOrName: string): Promise<string> => {
-  if (!idOrName) return idOrName;
-  const clean = String(idOrName).trim();
-  if (clean.startsWith("*")) return clean;
-  const prefix = getUserManPrefix(client);
-  try {
-    const direct = await client.querySafe(`${prefix}/profile/print`, [`?name=${clean}`], {
-      timeoutSeconds: 3,
-      rapid: true
-    });
-    if (Array.isArray(direct) && direct.length > 0 && direct[0][".id"]) {
-      return direct[0][".id"];
-    }
-  } catch {}
-  try {
-    const list = await client.querySafe(`${prefix}/profile/print`, undefined, { timeoutSeconds: 4, rapid: true });
-    if (Array.isArray(list)) {
-      const match = list.find(
-        (p: any) =>
-          p[".id"] === clean ||
-          p.id === clean ||
-          p.name === clean ||
-          (p.name && p.name.toLowerCase() === clean.toLowerCase())
-      );
-      if (match && match[".id"]) return match[".id"];
-    }
-  } catch {}
-  return clean;
-};
+export const resolveHotspotProfileId = (client: any, idOrName: string): Promise<string> =>
+  resolveRouterEntityId(client, "/ip/hotspot/user/profile/print", idOrName, true);
 
-export const resolveSimpleQueueId = async (client: any, idOrName: string): Promise<string> => {
-  if (!idOrName) return idOrName;
-  const clean = String(idOrName).trim();
-  if (clean.startsWith("*")) return clean;
-  try {
-    const direct = await client.querySafe("/queue/simple/print", [`?name=${clean}`], {
-      timeoutSeconds: 3,
-      rapid: true
-    });
-    if (Array.isArray(direct) && direct.length > 0 && direct[0][".id"]) {
-      return direct[0][".id"];
-    }
-  } catch {}
-  try {
-    const list = await client.querySafe("/queue/simple/print", undefined, { timeoutSeconds: 4, rapid: true });
-    if (Array.isArray(list)) {
-      const match = list.find(
-        (q: any) =>
-          q[".id"] === clean ||
-          q.id === clean ||
-          q.name === clean ||
-          (q.name && q.name.toLowerCase() === clean.toLowerCase())
-      );
-      if (match && match[".id"]) return match[".id"];
-    }
-  } catch {}
-  return clean;
-};
+export const resolvePPPProfileId = (client: any, idOrName: string): Promise<string> =>
+  resolveRouterEntityId(client, "/ppp/profile/print", idOrName, true);
 
-export const resolvePoolId = async (client: any, idOrName: string): Promise<string> => {
-  if (!idOrName) return idOrName;
-  if (idOrName.startsWith("*")) return idOrName;
-  try {
-    const list = await client.querySafe("/ip/pool/print", [`?name=${idOrName}`]);
-    if (Array.isArray(list) && list.length > 0 && list[0][".id"]) {
-      return list[0][".id"];
-    }
-  } catch {}
-  return idOrName;
-};
+export const resolveUsermanProfileId = (client: any, idOrName: string): Promise<string> =>
+  resolveRouterEntityId(client, `${getUserManPrefix(client)}/profile/print`, idOrName, true);
+
+export const resolveSimpleQueueId = (client: any, idOrName: string): Promise<string> =>
+  resolveRouterEntityId(client, "/queue/simple/print", idOrName, true);
+
+export const resolvePoolId = (client: any, idOrName: string): Promise<string> =>
+  resolveRouterEntityId(client, "/ip/pool/print", idOrName, false);
 
 function ipToLong(ip: string): number {
   if (!ip) return 0;
@@ -982,60 +1055,30 @@ export function normalizeUsermanProfile(p: any, profileLimitsMap?: Map<string, a
 }
 
 export function normalizeSimpleQueue(q: any) {
-  const rawBytes = String(q?.bytes ?? "0/0");
-  let bytesIn = 0;
-  let bytesOut = 0;
-  if (rawBytes.includes("/")) {
-    const [rx, tx] = rawBytes.split("/");
-    bytesIn = parseInt(rx, 10) || 0;
-    bytesOut = parseInt(tx, 10) || 0;
-  } else {
-    bytesIn = parseInt(rawBytes, 10) || 0;
-  }
-  return {
-    id: q?.[".id"] || q?.id || q?.name,
-    name: q?.name || "",
-    target: q?.target || q?.["target-addresses"] || "",
-    maxLimit: q?.["max-limit"] || q?.maxLimit || "",
-    limitAt: q?.["limit-at"] || q?.limitAt || "",
-    bytes: rawBytes,
-    bytesIn,
-    bytesOut,
-    bytesTotal: bytesIn + bytesOut,
-    packets: q?.packets || "0/0",
-    disabled: q?.disabled === "true" || q?.disabled === true || q?.disabled === "yes",
-    priority: q?.priority || "8/8",
-    burstLimit: q?.["burst-limit"] || "",
-    burstThreshold: q?.["burst-threshold"] || "",
-    burstTime: q?.["burst-time"] || "",
-    parent: q?.parent || "none",
-    queue: q?.queue || "",
-    comment: q?.comment || ""
+  return normalizeSimpleQueueRow(q) || {
+    id: q?.[".id"] || q?.id || q?.name || "",
+    name: "",
+    target: "",
+    maxLimit: "",
+    limitAt: "",
+    bytes: "0/0",
+    bytesIn: 0,
+    bytesOut: 0,
+    bytesTotal: 0,
+    packets: "0/0",
+    disabled: false,
+    priority: "8/8",
+    burstLimit: "",
+    burstThreshold: "",
+    burstTime: "",
+    parent: "none",
+    queue: "",
+    comment: ""
   };
 }
 
 export function normalizeDhcpLease(l: any) {
-  if (!l) return null;
-  const mac = l["mac-address"] || l.macAddress || "";
-  const host = l["host-name"] || l.hostName || "";
-  const isDyn = l.dynamic === "true" || l.dynamic === true || l.dynamic === "yes" || l.isDynamic || false;
-  const isDisabled = l.disabled === "true" || l.disabled === true || l.disabled === "yes" || l.disabled || false;
-  return {
-    id: l[".id"] || l.id || `lease-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-    address: l.address || "",
-    macAddress: mac,
-    "mac-address": mac,
-    hostName: host,
-    "host-name": host,
-    server: l.server || "all",
-    status: l.status || "bound",
-    expiresAfter: l["expires-after"] || l.expiresAfter || "",
-    "expires-after": l["expires-after"] || l.expiresAfter || "",
-    isDynamic: isDyn,
-    dynamic: isDyn ? "true" : "false",
-    comment: l.comment || "",
-    disabled: isDisabled
-  };
+  return normalizeDhcpLeaseRow(l);
 }
 
 export function parseDurationToSeconds(str?: string): number {
@@ -1175,8 +1218,8 @@ export async function fetchComprehensiveUsermanData(clientOverride?: any, force?
     fetchSafeCached(limPrintPath, undefined, 180000, client, force).catch(() => []),
     fetchSafeCached(plPrintPath, undefined, 180000, client, force).catch(() => []),
     fetchSafeCached(`${activePrefix}/session/print`, undefined, 15000, client, force).catch(() => []),
-    fetchSafeCached("/ip/dhcp-server/lease/print", undefined, 30000, client, force).catch(() => []),
-    fetchSafeCached("/ip/hotspot/host/print", undefined, 20000, client, force).catch(() => [])
+    fetchSafeCached("/ip/dhcp-server/lease/print", ["=.proplist=.id,address,mac-address,host-name"], 30000, client, force).catch(() => []),
+    fetchSafeCached("/ip/hotspot/host/print", ["=.proplist=.id,address,mac-address,host-name,comment"], 20000, client, force).catch(() => [])
   ]);
 
   const deviceNameMap = new Map<string, { hostName: string; ip: string }>();

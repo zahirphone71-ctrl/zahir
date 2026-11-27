@@ -102,7 +102,9 @@ export class MikrotikService {
             return { cipher: res.data, mode: 'os-keychain' };
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[Vault] OS keychain encryption failed, falling back to Web Crypto:', err);
+      }
     }
 
     // 2. Fallback to real Web Crypto AES-GCM-256 with random 96-bit IV
@@ -119,7 +121,9 @@ export class MikrotikService {
         const ivHex = Array.from(iv).map((b) => b.toString(16).padStart(2, '0')).join('');
         const cipherB64 = btoa(String.fromCharCode(...new Uint8Array(cipherBuf)));
         return { cipher: `${ivHex}:${cipherB64}`, mode: 'aes-gcm-v2' };
-      } catch {}
+      } catch (err) {
+        console.warn('[Vault] Web Crypto AES-GCM encryption failed:', err);
+      }
     }
 
     // Never persist weak XOR or plaintext if strong crypto is unavailable
@@ -135,7 +139,9 @@ export class MikrotikService {
         if (res?.success && typeof res.data === 'string') {
           return res.data;
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[Vault] OS keychain decryption failed:', err);
+      }
       return '';
     }
 
@@ -1019,19 +1025,7 @@ export class MikrotikService {
     } catch { return false; }
   }
 
-  static async reboot(): Promise<boolean> {
-    try {
-      const res = await MikrotikService.invoke('/system/reboot');
-      return res.success;
-    } catch { return false; }
-  }
 
-  static async shutdown(): Promise<boolean> {
-    try {
-      const res = await MikrotikService.invoke('/system/shutdown');
-      return res.success;
-    } catch { return false; }
-  }
 
   static async checkUpgrade(): Promise<any> {
     try {

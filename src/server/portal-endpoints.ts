@@ -77,7 +77,7 @@ export function createPortalEndpoints(
   const readFile = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
     const { path: rawPath } = req.query;
@@ -106,7 +106,7 @@ export function createPortalEndpoints(
   const writeFile = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
     const { path: rawPath, content } = req.body;
@@ -150,7 +150,7 @@ export function createPortalEndpoints(
   const listDirectory = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
     const { path: rawPath } = req.query;
@@ -179,7 +179,7 @@ export function createPortalEndpoints(
   const detectHotspotPath = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
     const result = await ftpService.detectHotspotPath(ftpConfig);
@@ -196,7 +196,7 @@ export function createPortalEndpoints(
   const deployPortal = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
 
@@ -311,7 +311,7 @@ export function createPortalEndpoints(
   const readAllPortalFiles = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
     const rawFolder = (req.query.folder as string) || 'hotspot';
@@ -360,7 +360,7 @@ export function createPortalEndpoints(
   const deleteFile = async (req: Request, res: Response): Promise<void> => {
     const ftpConfig = getFtpConfigFromRequest(req, routerClients, MikrotikAPI_Original);
     if (!ftpConfig) {
-      res.status(401).json({ success: false, message: 'غير متصل بالراوتر' });
+      res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
       return;
     }
     const { path: rawPath } = req.body;

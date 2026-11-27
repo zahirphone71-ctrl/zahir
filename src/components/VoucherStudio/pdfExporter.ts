@@ -3,6 +3,7 @@ import html2canvas from 'html2canvas';
 import { VoucherItem, VoucherDesignState, PrintLayoutOption } from './types';
 import { generateStandaloneVoucherHtmlAsync } from './voucherHtmlGenerator';
 import { preGenerateQrCodes } from './qrPreGenerator';
+import { getPaperSpec } from './gridCalculator';
 import { yieldToMain } from '../../lib/scheduler';
 
 export interface ExportBatchPdfParams {
@@ -27,6 +28,8 @@ export interface ExportPdfParams {
   fileName?: string;
   orientation?: 'portrait' | 'landscape';
   paperType?: VoucherDesignState['paperType'] | string;
+  cardHeightMm?: number;
+  paddingMm?: number;
   onProgress?: (progress: number, message?: string) => void;
   signal?: AbortSignal;
 }
@@ -39,10 +42,12 @@ function destroyCanvas(canvas: HTMLCanvasElement): void {
     }
     canvas.width = 0;
     canvas.height = 0;
-  } catch {}
+  } catch (err) {
+    console.warn('destroyCanvas cleanup warning:', err);
+  }
 }
 
-async function waitForImagesToLoad(container: HTMLElement): Promise<void> {
+async function waitForImagesToLoad(container: Document | HTMLElement): Promise<void> {
   const imgs = Array.from(container.querySelectorAll<HTMLImageElement>('img'));
   if (imgs.length === 0) return;
 
@@ -70,55 +75,44 @@ async function waitForImagesToLoad(container: HTMLElement): Promise<void> {
   );
 }
 
-function getPaperDimensions(paperType: string = 'a4', isLandscape: boolean = false, isPos: boolean = false) {
-  let widthMm = 210;
-  let heightMm = 297;
-  let format: string | [number, number] = 'a4';
-
-  if (isPos || (paperType && paperType.includes('thermal'))) {
-    const is58 = paperType === 'thermal_58mm';
-    widthMm = is58 ? 58 : 80;
-    heightMm = 200;
-    format = [widthMm, heightMm];
+function resolvePdfPaperDimensions(
+  paperType: string = 'a4',
+  orientation: 'portrait' | 'landscape' = 'portrait',
+  cardHeightMm: number = 52,
+  paddingMm: number = 4
+) {
+  const spec = getPaperSpec(
+    paperType as VoucherDesignState['paperType'],
+    orientation,
+    undefined,
+    undefined,
+    cardHeightMm,
+    paddingMm
+  );
+  if (spec.isPos) {
     return {
-      paperWidth: widthMm,
-      paperHeight: heightMm,
-      pdfWidth: widthMm,
-      pdfHeight: heightMm,
-      pdfFormat: [widthMm, heightMm] as [number, number],
+      paperWidth: spec.widthMm,
+      paperHeight: spec.heightMm,
+      pdfWidth: spec.widthMm,
+      pdfHeight: spec.heightMm,
+      pdfFormat: [spec.widthMm, spec.heightMm] as [number, number],
       isLandscape: false,
+      isPos: true,
     };
   }
 
-  const pType = (paperType || 'a4').toLowerCase();
-  if (pType === 'a3') {
-    widthMm = 297;
-    heightMm = 420;
-    format = 'a3';
-  } else if (pType === 'a5') {
-    widthMm = 148;
-    heightMm = 210;
-    format = 'a5';
-  } else if (pType === 'letter') {
-    widthMm = 215.9;
-    heightMm = 279.4;
-    format = 'letter';
-  } else {
-    widthMm = 210;
-    heightMm = 297;
-    format = 'a4';
-  }
-
-  const pdfWidth = isLandscape ? heightMm : widthMm;
-  const pdfHeight = isLandscape ? widthMm : heightMm;
+  const normalized = (paperType || 'a4').toLowerCase();
+  const namedFormat: string =
+    normalized === 'a3' || normalized === 'a5' || normalized === 'letter' ? normalized : 'a4';
 
   return {
-    paperWidth: widthMm,
-    paperHeight: heightMm,
-    pdfWidth,
-    pdfHeight,
-    pdfFormat: format,
-    isLandscape,
+    paperWidth: spec.widthMm,
+    paperHeight: spec.heightMm,
+    pdfWidth: spec.widthMm,
+    pdfHeight: spec.heightMm,
+    pdfFormat: namedFormat,
+    isLandscape: orientation === 'landscape',
+    isPos: false,
   };
 }
 
@@ -127,6 +121,8 @@ export async function exportA4SheetToPdf({
   fileName = `vouchers-${Date.now()}.pdf`,
   orientation = 'portrait',
   paperType = 'a4',
+  cardHeightMm = 52,
+  paddingMm = 4,
   onProgress,
   signal,
 }: ExportPdfParams): Promise<void> {
@@ -145,10 +141,10 @@ export async function exportA4SheetToPdf({
     }
 
     const isLandscape = orientation === 'landscape';
-    const dim = getPaperDimensions(paperType, isLandscape, false);
+    const dim = resolvePdfPaperDimensions(paperType, orientation, cardHeightMm, paddingMm);
 
     const pdf = new jsPDF({
-      orientation: isLandscape ? 'landscape' : 'portrait',
+      orientation: dim.isLandscape ? 'landscape' : 'portrait',
       unit: 'mm',
       format: dim.pdfFormat,
       compress: true,
@@ -158,7 +154,7 @@ export async function exportA4SheetToPdf({
     hostContainer.id = 'zctrl-pdf-render-isolated-host';
     hostContainer.style.position = 'fixed';
     hostContainer.style.top = '0';
-    hostContainer.style.left = '0';
+    hostContainer.style.left = '-99999px';
     hostContainer.style.zIndex = '-99999';
     hostContainer.style.opacity = '1';
     hostContainer.style.visibility = 'visible';
@@ -212,7 +208,7 @@ export async function exportA4SheetToPdf({
       const imgData = canvas.toDataURL('image/jpeg', 0.98);
 
       if (i > 0) {
-        pdf.addPage(dim.pdfFormat, isLandscape ? 'landscape' : 'portrait');
+        pdf.addPage(dim.pdfFormat, isLandscape && !dim.isPos ? 'landscape' : 'portrait');
       }
 
       pdf.addImage(imgData, 'JPEG', 0, 0, dim.pdfWidth, dim.pdfHeight, undefined, 'FAST');
@@ -232,6 +228,7 @@ export async function exportA4SheetToPdf({
     throw error;
   } finally {
     if (hostContainer && hostContainer.parentNode) {
+      hostContainer.innerHTML = '';
       hostContainer.parentNode.removeChild(hostContainer);
     }
   }
@@ -249,8 +246,8 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
     showQr,
     fileName = `vouchers-${(networkName || 'network').replace(/\s+/g, '_')}-${Date.now()}.pdf`,
     fontScale = 1.0,
-    gapMm = 4,
-    paddingMm = 4,
+    gapMm,
+    paddingMm,
     onProgress,
     signal,
   } = params;
@@ -260,8 +257,24 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
     throw new Error('لا توجد كروت للتصدير');
   }
 
-  let tempContainer: HTMLElement | null = null;
-  let injectedStyleEl: HTMLStyleElement | null = null;
+  const resolvedGapMm = gapMm ?? design.cardGap ?? (design.paperType === 'a4_100' ? 1 : 4);
+  const resolvedPaddingMm = paddingMm ?? design.cardMarginSide ?? (design.paperType === 'a4_100' ? 2 : 4);
+  const isPos = Boolean(
+    layout.isPos ||
+    layout.id.startsWith('pos') ||
+    design.paperType?.includes('thermal') ||
+    design.paperType?.startsWith('pos') ||
+    (layout.cols === 1 && layout.rows === 1)
+  );
+  const orientation: 'portrait' | 'landscape' = design.paperOrientation === 'landscape' ? 'landscape' : 'portrait';
+  const dim = resolvePdfPaperDimensions(
+    design.paperType || 'a4',
+    orientation,
+    design.cardHeightMm || 52,
+    resolvedPaddingMm
+  );
+
+  let iframe: HTMLIFrameElement | null = null;
   let qrMap: Map<string, string> | undefined;
 
   try {
@@ -286,9 +299,6 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
     onProgress?.(22, 'بناء صفحات الطباعة الحقيقية...');
     await yieldToMain();
 
-    const isLandscape = design.paperOrientation === 'landscape';
-    const isPos = layout.id.startsWith('pos') || (layout.cols === 1 && layout.rows === 1);
-
     const fullHtml = await generateStandaloneVoucherHtmlAsync(
       {
         vouchers,
@@ -305,8 +315,8 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
         isPos,
         qrDataUrlMap: qrMap,
         fontScale,
-        gapMm,
-        paddingMm,
+        gapMm: resolvedGapMm,
+        paddingMm: resolvedPaddingMm,
         signal,
       },
       (msg) => {
@@ -314,46 +324,71 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
       }
     );
 
-    const dim = getPaperDimensions(design.paperType, isLandscape, isPos);
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(fullHtml, 'text/html');
+    // مسار Electron الأصلي (Vector PDF بجودة طباعة احترافية ونصوص حقيقية)
+    if (typeof window !== 'undefined' && window.zctrlDesktopPrint?.printToPdf) {
+      onProgress?.(55, 'تحويل الصفحات إلى Vector PDF عبر محرك سطح المكتب...');
+      const res = await window.zctrlDesktopPrint.printToPdf({
+        html: fullHtml,
+        fileName,
+        paperType: design.paperType || 'a4',
+        paperHeightMm: dim.paperHeight,
+        orientation,
+        isPos,
+      });
 
-    const styles = doc.querySelectorAll('style');
-    let allCssText = '';
-    styles.forEach((s) => {
-      allCssText += '\n' + (s.textContent || '');
-    });
-
-    injectedStyleEl = document.createElement('style');
-    injectedStyleEl.id = 'zctrl-pdf-export-runtime-styles';
-    injectedStyleEl.textContent = allCssText;
-    document.head.appendChild(injectedStyleEl);
-
-    if (document.fonts && document.fonts.ready) {
-      await document.fonts.ready;
+      if (res.canceled) {
+        onProgress?.(0, 'تم إلغاء الحفظ');
+        return;
+      }
+      if (!res.success) {
+        throw new Error(res.error || 'فشل تصدير ملف PDF عبر محرك سطح المكتب');
+      }
+      onProgress?.(100, 'تم حفظ ملف Vector PDF بنجاح!');
+      return;
     }
 
-    tempContainer = document.createElement('div');
-    tempContainer.id = 'temp-pdf-export-host';
-    tempContainer.style.position = 'fixed';
-    tempContainer.style.top = '0';
-    tempContainer.style.left = '0';
-    tempContainer.style.width = isPos ? '80mm' : `${dim.pdfWidth}mm`;
-    tempContainer.style.minHeight = isPos ? '200mm' : `${dim.pdfHeight}mm`;
-    tempContainer.style.zIndex = '-99999';
-    tempContainer.style.opacity = '1';
-    tempContainer.style.visibility = 'visible';
-    tempContainer.style.pointerEvents = 'none';
-    tempContainer.style.overflow = 'visible';
-    tempContainer.style.background = '#ffffff';
-    document.body.appendChild(tempContainer);
+    // مسار المتصفح المعزول عبر Iframe مخفي (دون أي تعديل على document.head)
+    iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.left = '-99999px';
+    iframe.style.top = '0';
+    iframe.style.width = '1400px';
+    iframe.style.height = '1800px';
+    iframe.style.border = 'none';
+    iframe.style.pointerEvents = 'none';
+    iframe.style.opacity = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
 
-    const pageElements = Array.from(doc.querySelectorAll<HTMLElement>('.a4-page, .pos-page'));
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      iframe!.addEventListener('load', done, { once: true });
+      iframe!.srcdoc = fullHtml;
+      setTimeout(done, 1500);
+    });
+
+    const iframeDoc = iframe.contentDocument;
+    if (!iframeDoc) {
+      throw new Error('تعذر تهيئة بيئة تصدير PDF المعزولة');
+    }
+
+    if (iframeDoc.fonts && iframeDoc.fonts.ready) {
+      await iframeDoc.fonts.ready;
+    }
+    await waitForImagesToLoad(iframeDoc);
+
+    const pageElements = Array.from(iframeDoc.querySelectorAll<HTMLElement>('.a4-page, .pos-page'));
     const totalPages = Math.max(1, pageElements.length);
 
     const pdf = new jsPDF({
-      orientation: isLandscape ? 'landscape' : 'portrait',
+      orientation: dim.isLandscape ? 'landscape' : 'portrait',
       unit: 'mm',
       format: dim.pdfFormat,
       compress: true,
@@ -372,22 +407,10 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
       onProgress?.(basePct, `معالجة وتصيير صفحة ${p + 1} من ${totalPages}...`);
       await yieldToMain();
 
-      tempContainer.innerHTML = '';
+      pageEl.style.margin = '0';
+      pageEl.style.boxShadow = 'none';
 
-      const pageClone = pageEl.cloneNode(true) as HTMLElement;
-      pageClone.style.margin = '0';
-      pageClone.style.boxShadow = 'none';
-
-      // Note: allCssText is already injected once in document.head via injectedStyleEl,
-      // avoiding O(N) stylesheet duplication and CSSOM bloat on multi-page batches.
-      tempContainer.appendChild(pageClone);
-
-      await waitForImagesToLoad(tempContainer);
-      if (document.fonts && document.fonts.ready) {
-        await document.fonts.ready;
-      }
-
-      const canvas = await html2canvas(pageClone, {
+      const canvas = await html2canvas(pageEl, {
         scale: renderScale,
         useCORS: true,
         allowTaint: true,
@@ -398,7 +421,7 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
         scrollY: 0,
         x: 0,
         y: 0,
-        windowWidth: Math.max(window.innerWidth, 1600),
+        windowWidth: Math.max(iframe.contentWindow?.innerWidth || 1400, 1400),
         ignoreElements: (node) =>
           node.classList?.contains('no-print') || node.classList?.contains('no-export'),
       });
@@ -406,15 +429,13 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
       let imgData: string | null = canvas.toDataURL('image/jpeg', jpegQuality);
 
       if (p > 0) {
-        pdf.addPage(dim.pdfFormat, isLandscape ? 'landscape' : 'portrait');
+        pdf.addPage(dim.pdfFormat, dim.isLandscape ? 'landscape' : 'portrait');
       }
 
       pdf.addImage(imgData, 'JPEG', 0, 0, dim.pdfWidth, dim.pdfHeight, undefined, 'FAST');
 
       imgData = null;
       destroyCanvas(canvas);
-      tempContainer.innerHTML = '';
-      // Give browser GC a clean breathing frame every 5 pages on large exports
       if (totalPages > 10 && (p + 1) % 5 === 0) {
         await new Promise<void>((r) => setTimeout(r, 16));
       } else {
@@ -433,12 +454,8 @@ export async function exportBatchVouchersToPdf(params: ExportBatchPdfParams): Pr
   } finally {
     qrMap?.clear();
     qrMap = undefined;
-    if (tempContainer && tempContainer.parentNode) {
-      tempContainer.innerHTML = '';
-      tempContainer.parentNode.removeChild(tempContainer);
-    }
-    if (injectedStyleEl && injectedStyleEl.parentNode) {
-      injectedStyleEl.parentNode.removeChild(injectedStyleEl);
+    if (iframe && iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe);
     }
   }
 }

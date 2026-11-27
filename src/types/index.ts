@@ -41,6 +41,27 @@ export interface ZCtrlDesktopVault {
   isEncryptionAvailable: () => Promise<boolean>;
   encryptSecret: (plainText: string) => Promise<{ success: boolean; data?: string; error?: string }>;
   decryptSecret: (cipherBase64: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+  getVaultKeyStatus?: () => Promise<{ mode?: string; healthy?: boolean; warning?: string | null }>;
+  exportVaultKeyBackup?: () => Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }>;
+}
+
+export interface ZCtrlDesktopPrintPayload {
+  html: string;
+  fileName?: string;
+  paperType?: string;
+  paperHeightMm?: number;
+  orientation?: 'portrait' | 'landscape';
+  isPos?: boolean;
+}
+
+export interface ZCtrlDesktopPrint {
+  isDesktop: boolean;
+  printToPdf: (payload: ZCtrlDesktopPrintPayload) => Promise<{
+    success: boolean;
+    canceled?: boolean;
+    filePath?: string;
+    error?: string;
+  }>;
 }
 
 export interface ElectronAPI {
@@ -52,5 +73,6 @@ declare global {
   interface Window {
     electronAPI?: ElectronAPI;
     zctrlDesktopVault?: ZCtrlDesktopVault;
+    zctrlDesktopPrint?: ZCtrlDesktopPrint;
   }
 }

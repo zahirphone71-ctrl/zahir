@@ -31,9 +31,10 @@ export interface ScriptAuditItem {
 export const auditSecurityApi = async (req: Request, res: Response) => {
   const client: MikrotikClient = (req as any).routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({
+    return res.status(503).json({
       success: false,
-      message: 'الراوتر غير متصل حالياً. يرجى تسجيل الدخول للراوتر أولاً.'
+      reconnecting: true,
+      message: 'جاري إعادة الاتصال بالراوتر'
     });
   }
 
@@ -405,9 +406,10 @@ export const auditSecurityApi = async (req: Request, res: Response) => {
 export const autoFixSecurityApi = async (req: Request, res: Response) => {
   const client: MikrotikClient = (req as any).routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({
+    return res.status(503).json({
       success: false,
-      message: 'الراوتر غير متصل حالياً.'
+      reconnecting: true,
+      message: 'جاري إعادة الاتصال بالراوتر'
     });
   }
 
@@ -611,7 +613,7 @@ export const autoFixSecurityApi = async (req: Request, res: Response) => {
 export const auditScriptsApi = async (req: Request, res: Response) => {
   const client: MikrotikClient = (req as any).routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({ success: false, message: 'الراوتر غير متصل.' });
+    return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
   }
 
   try {
@@ -697,7 +699,7 @@ export const auditScriptsApi = async (req: Request, res: Response) => {
 export const cleanScriptsApi = async (req: Request, res: Response) => {
   const client: MikrotikClient = (req as any).routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({ success: false, message: 'الراوتر غير متصل.' });
+    return res.status(503).json({ success: false, reconnecting: true, message: 'جاري إعادة الاتصال بالراوتر' });
   }
 
   try {
@@ -761,9 +763,10 @@ export const cleanScriptsApi = async (req: Request, res: Response) => {
 export const discoverManagementPortsAndIpsApi = async (req: Request, res: Response) => {
   const client: MikrotikClient = (req as any).routerClient || MikrotikAPI;
   if (!client || !client.isConnected()) {
-    return res.status(401).json({
+    return res.status(503).json({
       success: false,
-      message: 'الراوتر غير متصل حالياً لاستخراج منافذ الإدارة الداخلية.'
+      reconnecting: true,
+      message: 'جاري إعادة الاتصال بالراوتر'
     });
   }
 

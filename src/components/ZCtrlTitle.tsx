@@ -9,7 +9,7 @@ interface ZCtrlTitleProps {
 export const ZCtrlTitle: React.FC<ZCtrlTitleProps> = ({
   className = '',
   size = 'md',
-  animated = true,
+  animated = false,
 }) => {
   const sizeClasses = {
     sm: 'text-sm font-black tracking-wider',

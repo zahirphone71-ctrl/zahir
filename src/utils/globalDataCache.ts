@@ -238,11 +238,15 @@ export async function pruneStaleGlobalCache(maxAgeMs: number = 48 * 60 * 60 * 10
       for (const rec of records) {
         if (rec.timestamp && now - rec.timestamp > maxAgeMs) {
           const storeName = rec.key.replace('_meta', '') as GlobalCacheStore;
-          clearGlobalCache(storeName).catch(() => {});
+          clearGlobalCache(storeName).catch((err) => {
+            console.warn('Could not clear stale cache store:', storeName, err);
+          });
         }
       }
     };
-  } catch {}
+  } catch (err) {
+    console.warn('Could not prune stale global cache:', err);
+  }
 }
 
 let pruneInitialTimeout: ReturnType<typeof setTimeout> | null = null;

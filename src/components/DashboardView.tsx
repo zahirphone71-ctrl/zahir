@@ -1,5 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { useMikroTik } from '../context/MikroTikContext';
+import {
+  useConnectionSession,
+  useRouterTelemetry,
+  useSubscribersState,
+  useNetworkState,
+  useMikroTikActions
+} from '../context/MikroTikContext';
 import { TabType } from './Sidebar';
 import {
   Users,
@@ -40,19 +46,20 @@ interface DashboardViewProps {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
+  const { isConnected } = useConnectionSession();
+  const { router, interfaces, ecoMode, thermalShieldActive } = useRouterTelemetry();
   const {
-    router,
-    isConnected,
     users,
     profiles,
     activeUsers,
-    interfaces,
     pppSecrets,
     pppProfiles,
     pppActive,
     usermanUsers,
     usermanProfiles,
-    usermanActive,
+    usermanActive
+  } = useSubscribersState();
+  const {
     simpleQueues,
     ipBindings,
     dhcpLeases,
@@ -61,11 +68,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     wirelessInterfaces,
     registrationTable,
     hotspotServerProfiles,
-    scheduledTasks,
-    ecoMode,
-    setEcoMode,
-    thermalShieldActive
-  } = useMikroTik();
+    scheduledTasks
+  } = useNetworkState();
+  const { setEcoMode } = useMikroTikActions();
 
   const totalVouchers = useMemo(() => (users || []).filter((u) => u && u.isVoucher).length, [users]);
   const totalRevenue = useMemo(
@@ -403,7 +408,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           {/* Router Identity and Live State */}
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-xl shadow-blue-600/30 border border-blue-400/40 shrink-0">
-              <Radio className="w-7 h-7 animate-pulse" />
+              <Radio className="w-7 h-7" />
             </div>
 
             <div>
@@ -415,7 +420,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   {router?.name || 'MikroTik Router'}
                 </span>
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]"></span>
                   مراقبة حية نشطة
                 </span>
                 <button

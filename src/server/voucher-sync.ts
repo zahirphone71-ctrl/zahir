@@ -7,6 +7,7 @@ import type {
 } from '../shared/voucher-types.ts';
 import { getRouterMutex } from './mutex.ts';
 import { voucherDb } from './voucher-db.ts';
+import { appLogger } from './rotatingLogger.ts';
 
 /**
  * تحويل الوقت إلى صيغة RouterOS المقبولة
@@ -143,7 +144,9 @@ export async function getRouterPrecheck(client: any): Promise<RouterPrecheckInfo
       if (Array.isArray(routerProfilesRes) && routerProfilesRes.length > 0) {
         profiles = routerProfilesRes.map((p: any) => p.name).filter(Boolean);
       }
-    } catch {}
+    } catch (err: any) {
+      appLogger.warn('VoucherSync', 'Precheck hotspot profiles query failed', { error: err?.message });
+    }
     
     const routerCount = stats.syncedVouchers > 0 ? stats.syncedVouchers : (stats.totalVouchers || 0);
 
@@ -232,7 +235,9 @@ export async function syncBatchToRouter(
             }
           }
         }
-      } catch {}
+      } catch (err: any) {
+        appLogger.warn('VoucherSync', 'Hotspot profile validation lookup failed', { error: err?.message });
+      }
     } else if (serviceType === 'PPPOE') {
       try {
         const pppProfiles = await client.querySafe('/ppp/profile/print', ['.proplist=name']);
@@ -246,7 +251,9 @@ export async function syncBatchToRouter(
             }
           }
         }
-      } catch {}
+      } catch (err: any) {
+        appLogger.warn('VoucherSync', 'PPPoE profile validation lookup failed', { error: err?.message });
+      }
     } else if (serviceType === 'USERMAN') {
       try {
         const isV6 = client.isV6 ? client.isV6() : false;
@@ -262,7 +269,9 @@ export async function syncBatchToRouter(
             }
           }
         }
-      } catch {}
+      } catch (err: any) {
+        appLogger.warn('VoucherSync', 'User Manager profile validation lookup failed', { error: err?.message });
+      }
     }
 
     // إخطار السيرفر بحظر الاستعلامات الدورية المتزامنة على المقبس لحماية الراوتر من التشنج
@@ -381,7 +390,9 @@ export async function syncBatchToRouter(
                     `=profile=${effectiveProfile}`,
                     `=customer=admin`
                   ], { rapid: true });
-                } catch {}
+                } catch (err: any) {
+                  appLogger.warn('VoucherSync', 'User Manager v6 profile activation warning', { code: item.voucherCode, error: err?.message });
+                }
               }
             } else {
               // RouterOS v7 User Manager
@@ -438,7 +449,9 @@ export async function syncBatchToRouter(
                       `?name=${item.voucherCode}`,
                       `=group=${effectiveProfile}`
                     ], { rapid: true });
-                  } catch {}
+                  } catch (err: any) {
+                    appLogger.warn('VoucherSync', 'User Manager v7 profile assignment fallback warning', { code: item.voucherCode, error: err?.message });
+                  }
                 }
               }
             }

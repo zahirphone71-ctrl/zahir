@@ -56,17 +56,16 @@ async function buildWindows() {
       process.exit(1);
     }
 
-    // 2. Ensure build directory & icons exist and match the in-app logo
-    const buildDir = path.resolve(projectRoot, 'build');
-    if (!fs.existsSync(buildDir)) {
-      fs.mkdirSync(buildDir, { recursive: true });
+    // 2. Ensure assets directory & icons exist and match the in-app logo
+    const assetsDir = path.resolve(projectRoot, 'assets');
+    if (!fs.existsSync(assetsDir)) {
+      fs.mkdirSync(assetsDir, { recursive: true });
     }
 
     const rootIco = path.resolve(projectRoot, 'icon.ico');
-    const buildIco = path.resolve(buildDir, 'icon.ico');
-    const buildHeaderIco = path.resolve(buildDir, 'installerHeaderIcon.ico');
+    const assetsIco = path.resolve(assetsDir, 'icon.ico');
 
-    if (!fs.existsSync(buildIco) || !fs.existsSync(rootIco) || !fs.existsSync(buildHeaderIco)) {
+    if (!fs.existsSync(assetsIco) || !fs.existsSync(rootIco)) {
       try {
         console.log('🎨 توليد أيقونات التطبيق المتطابقة مع الشعار...');
         const { spawnSync } = await import('child_process');
@@ -76,11 +75,10 @@ async function buildWindows() {
       }
     }
 
-    if (fs.existsSync(rootIco)) {
-      if (!fs.existsSync(buildIco)) fs.copyFileSync(rootIco, buildIco);
-      if (!fs.existsSync(buildHeaderIco)) fs.copyFileSync(rootIco, buildHeaderIco);
-    } else if (fs.existsSync(buildIco)) {
-      if (!fs.existsSync(rootIco)) fs.copyFileSync(buildIco, rootIco);
+    if (fs.existsSync(rootIco) && !fs.existsSync(assetsIco)) {
+      fs.copyFileSync(rootIco, assetsIco);
+    } else if (fs.existsSync(assetsIco) && !fs.existsSync(rootIco)) {
+      fs.copyFileSync(assetsIco, rootIco);
     }
 
     // 3. Clean previous unpacked build if needed to avoid file-locks
@@ -95,7 +93,7 @@ async function buildWindows() {
       console.warn('⚠️ ملاحظة: لم نتمكن من حذف مجلد البناء السابق بالكامل. إذا فشل البناء، تأكد من إغلاق ZCtrl.exe من مدير المهام (Task Manager).');
     }
 
-    // 4. Package Windows Executable (NSIS & Portable)
+    // 4. Package Windows Executable (NSIS & Portable) using single-source electron-builder.json
     console.log('📦 [3/3] جاري تحزيم ملف التثبيت والنسخة المحمولة (EXE & Portable)...');
     let builder;
     try {
@@ -118,45 +116,12 @@ async function buildWindows() {
       }
     }
 
+    const builderConfigPath = path.resolve(projectRoot, 'electron-builder.json');
+    const builderConfig = JSON.parse(fs.readFileSync(builderConfigPath, 'utf8'));
+
     const result = await builder.build({
       targets: builder.Platform.WINDOWS.createTarget(['nsis', 'portable'], builder.Arch.x64),
-      config: {
-        appId: 'com.zctrl.mikrotik',
-        productName: 'ZCtrl',
-        asar: true,
-        directories: {
-          output: 'dist-electron',
-          buildResources: 'build'
-        },
-        files: [
-          'dist/**/*',
-          'electron-main.cjs',
-          'electron-preload.cjs',
-          'package.json',
-          'build/**/*',
-          'public/**/*',
-          'icon.ico',
-          'icon.png'
-        ],
-        win: {
-          icon: 'build/icon.ico',
-          verifyUpdateCodeSignature: false,
-          target: [
-            { target: 'nsis', arch: ['x64'] },
-            { target: 'portable', arch: ['x64'] }
-          ]
-        },
-        nsis: {
-          oneClick: false,
-          allowToChangeInstallationDirectory: true,
-          createDesktopShortcut: true,
-          createStartMenuShortcut: true,
-          shortcutName: 'ZCtrl',
-          installerIcon: 'build/icon.ico',
-          uninstallerIcon: 'build/icon.ico',
-          installerHeaderIcon: 'build/installerHeaderIcon.ico'
-        }
-      }
+      config: builderConfig
     });
 
     console.log('\n==================================================');

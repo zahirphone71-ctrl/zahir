@@ -11,9 +11,6 @@ export interface TelegramConfig {
   notifyOnDailyReport: boolean;
 }
 
-const DATA_DIR = process.env.ZCTRL_DATA_DIR || path.join(process.cwd(), '.zctrl_data');
-const TELEGRAM_CONFIG_FILE = path.join(DATA_DIR, 'telegram_config.json');
-
 const DEFAULT_CONFIG: TelegramConfig = {
   enabled: false,
   botToken: '',
@@ -24,18 +21,28 @@ const DEFAULT_CONFIG: TelegramConfig = {
   notifyOnDailyReport: true
 };
 
-export class TelegramAlertService {
-  private config: TelegramConfig = { ...DEFAULT_CONFIG };
-  private lastAlertTimes = new Map<string, number>();
+interface AlertThrottleRecord {
+  sentAt: number;
+  expiresAt: number;
+}
 
-  constructor() {
+export class TelegramAlertService {
+  private static readonly MAX_THROTTLE_KEYS = 200;
+  private readonly dataDir: string;
+  private readonly configFile: string;
+  private config: TelegramConfig = { ...DEFAULT_CONFIG };
+  private lastAlertTimes = new Map<string, AlertThrottleRecord>();
+
+  constructor(customDataDir?: string) {
+    this.dataDir = customDataDir || process.env.ZCTRL_DATA_DIR || path.join(process.cwd(), '.zctrl_data');
+    this.configFile = path.join(this.dataDir, 'telegram_config.json');
     this.loadConfig();
   }
 
   private loadConfig() {
     try {
-      if (fs.existsSync(TELEGRAM_CONFIG_FILE)) {
-        const raw = fs.readFileSync(TELEGRAM_CONFIG_FILE, 'utf-8');
+      if (fs.existsSync(this.configFile)) {
+        const raw = fs.readFileSync(this.configFile, 'utf-8');
         this.config = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
       }
     } catch (e) {
@@ -50,14 +57,47 @@ export class TelegramAlertService {
   public saveConfig(newConfig: Partial<TelegramConfig>): TelegramConfig {
     this.config = { ...this.config, ...newConfig };
     try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
+      if (!fs.existsSync(this.dataDir)) {
+        fs.mkdirSync(this.dataDir, { recursive: true });
       }
-      fs.writeFileSync(TELEGRAM_CONFIG_FILE, JSON.stringify(this.config, null, 2), 'utf-8');
+      const tmp = `${this.configFile}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      fs.renameSync(tmp, this.configFile);
     } catch (e) {
       console.error('[TelegramService] Failed to save config:', e);
     }
     return { ...this.config };
+  }
+
+  private buildThrottleKey(title: string, level: string, categoryKey?: string): string {
+    if (categoryKey && categoryKey.trim()) {
+      return `${categoryKey.trim().toLowerCase()}_${level}`;
+    }
+    // Strip variable IPs, MACs, ports, and numbers so dynamic titles map to a bounded category key
+    const normalizedTitle = String(title || 'alert')
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, '#ip')
+      .replace(/\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b/g, '#mac')
+      .replace(/\d+/g, '#')
+      .trim()
+      .slice(0, 80);
+    return `${normalizedTitle}_${level}`;
+  }
+
+  private pruneThrottleMap(now: number): void {
+    for (const [k, rec] of this.lastAlertTimes.entries()) {
+      if (now >= rec.expiresAt) {
+        this.lastAlertTimes.delete(k);
+      }
+    }
+    while (this.lastAlertTimes.size > TelegramAlertService.MAX_THROTTLE_KEYS) {
+      const oldestKey = this.lastAlertTimes.keys().next().value;
+      if (!oldestKey) break;
+      this.lastAlertTimes.delete(oldestKey);
+    }
+  }
+
+  public getThrottleMapSize(): number {
+    return this.lastAlertTimes.size;
   }
 
   public async sendMessage(
@@ -106,17 +146,23 @@ export class TelegramAlertService {
     title: string,
     details: string,
     level: 'info' | 'warning' | 'danger' | 'success' = 'info',
-    throttleMinutes: number = 5
+    throttleMinutes: number = 5,
+    categoryKey?: string
   ): Promise<boolean> {
     if (!this.config.enabled || !this.config.botToken || !this.config.chatId) {
       return false;
     }
 
-    const throttleKey = `${title}_${level}`;
     const now = Date.now();
-    const lastSent = this.lastAlertTimes.get(throttleKey) || 0;
-    if (now - lastSent < throttleMinutes * 60 * 1000) {
-      return false; // Throttled
+    this.pruneThrottleMap(now);
+
+    const throttleMs = Math.max(0, throttleMinutes) * 60 * 1000;
+    const throttleKey = this.buildThrottleKey(title, level, categoryKey);
+    if (throttleMs > 0) {
+      const existing = this.lastAlertTimes.get(throttleKey);
+      if (existing && now < existing.expiresAt) {
+        return false; // Throttled
+      }
     }
 
     const icons = {
@@ -139,7 +185,11 @@ ${details}
 
     const result = await this.sendMessage(formattedMessage);
     if (result.success) {
-      this.lastAlertTimes.set(throttleKey, now);
+      if (throttleMs > 0) {
+        this.lastAlertTimes.delete(throttleKey);
+        this.lastAlertTimes.set(throttleKey, { sentAt: now, expiresAt: now + throttleMs });
+        this.pruneThrottleMap(now);
+      }
       return true;
     }
     return false;

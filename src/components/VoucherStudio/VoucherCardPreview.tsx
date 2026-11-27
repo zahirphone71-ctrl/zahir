@@ -1,5 +1,7 @@
 import React from 'react';
+import DOMPurify from 'dompurify';
 import { QRCodeSVG } from 'qrcode.react';
+import { Tag, Clock, BarChart2 } from 'lucide-react';
 import { VoucherDesignState } from './types';
 import { buildAutoLoginQrUrl } from './qrUtils';
 import {
@@ -14,6 +16,8 @@ import {
   renderLogos,
   computeElementZIndex,
   resolveFontStack,
+  sanitizeImageSrc,
+  MIN_SECONDARY_FONT_PX,
 } from './voucherRenderCore';
 
 interface VoucherCardPreviewProps {
@@ -105,7 +109,8 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
     const decorations = renderDecorations(ctx.preset, scale);
     const logos = renderLogos(activeDesign, scale);
 
-    const effectiveNetwork = activeDesign.networkName || networkName || 'شبكة زاهر للإنترنت';
+    const safeBgImage = activeDesign.showBgImage !== false ? sanitizeImageSrc(activeDesign.bgImage) : '';
+    const effectiveNetwork = activeDesign.networkName || networkName || 'شبكة الإنترنت';
     const effectivePrice = price ?? activeDesign.price ?? 500;
     const effectiveCurrency = currency || activeDesign.currencySymbol || 'ريال';
     const effectiveTime = timeLimit || activeDesign.timeLimit || '30 يوم';
@@ -133,17 +138,21 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
           boxSizing: 'border-box',
         }}
       >
-        {activeDesign.bgImage && (
+        {safeBgImage && (
           <img
-            src={activeDesign.bgImage}
+            src={safeBgImage}
             alt=""
             className="absolute inset-0 w-full h-full object-cover opacity-25 pointer-events-none z-0"
           />
         )}
 
-        {decorations.map((d, i) => (
-          <div key={i} style={d.style} dangerouslySetInnerHTML={d.svg ? { __html: d.svg } : undefined} />
-        ))}
+        {decorations.map((d, i) => {
+          const safeSvg =
+            d.svg && typeof DOMPurify?.sanitize === 'function'
+              ? DOMPurify.sanitize(d.svg, { USE_PROFILES: { svg: true, svgFilters: true } })
+              : '';
+          return <div key={i} style={d.style} dangerouslySetInnerHTML={safeSvg ? { __html: safeSvg } : undefined} />;
+        })}
 
         {logos.map((l) => (
           <img key={l.id} src={l.src} alt="" style={l.style} />
@@ -195,7 +204,7 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
         {/* 3. Profile */}
         {elProfile.show && coords.profile && (
           <div
-            className="absolute whitespace-nowrap opacity-90"
+            className="absolute whitespace-nowrap opacity-90 inline-flex items-center gap-0.5"
             style={{
               left: `${coords.profile.x}%`,
               top: `${coords.profile.y}%`,
@@ -209,7 +218,8 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
               zIndex: computeElementZIndex('profile', activeDesign),
             }}
           >
-            🏷️ {effectiveProfile}
+            <Tag style={{ width: '0.95em', height: '0.95em', flexShrink: 0 }} />
+            <span>{effectiveProfile}</span>
           </div>
         )}
 
@@ -231,14 +241,15 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
               ...computeBoxStyle(ctx.preset.userBoxStyle, ctx.preset.userBoxBg, ctx.preset.userBoxBorder, scale),
             }}
           >
-            <span className="text-[70%] opacity-80 ml-1 font-sans font-normal">كود:</span>
-            <span>{code || '••••••'}</span>
+            <span className="text-[72%] opacity-80 ml-1 font-sans font-normal">كود:</span>
+            <span dir="ltr">{code || '••••••'}</span>
           </div>
         )}
 
         {/* 5. Password */}
         {(effectiveAuthMode === 'user_pass' || effectiveAuthMode === 'user_equals_pass') &&
-          elPass.show && (
+          elPass.show &&
+          !(effectiveAuthMode === 'user_equals_pass' && activeDesign.hidePasswordIfEqual) && (
             <div
               className="absolute whitespace-nowrap font-mono"
               style={{
@@ -260,8 +271,8 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
                 ),
               }}
             >
-              <span className="text-[70%] opacity-80 ml-1 font-sans font-normal">باسورد:</span>
-              <span>{pin || code || '••••'}</span>
+              <span className="text-[72%] opacity-80 ml-1 font-sans font-normal">باسورد:</span>
+              <span dir="ltr">{effectiveAuthMode === 'user_equals_pass' ? (code || '••••••') : (pin || code || '••••')}</span>
             </div>
           )}
 
@@ -285,7 +296,7 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
         {/* 7. Time */}
         {elTime.show && (
           <div
-            className="absolute whitespace-nowrap opacity-90"
+            className="absolute whitespace-nowrap opacity-90 inline-flex items-center gap-0.5"
             style={{
               left: `${coords.time.x}%`,
               top: `${coords.time.y}%`,
@@ -299,14 +310,15 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
               zIndex: computeElementZIndex('time', activeDesign),
             }}
           >
-            ⏱️ {effectiveTime}
+            <Clock style={{ width: '0.95em', height: '0.95em', flexShrink: 0 }} />
+            <span>{effectiveTime}</span>
           </div>
         )}
 
         {/* 8. Data Limit */}
         {elData.show && coords.dataLimit && (
           <div
-            className="absolute whitespace-nowrap opacity-90"
+            className="absolute whitespace-nowrap opacity-90 inline-flex items-center gap-0.5"
             style={{
               left: `${coords.dataLimit.x}%`,
               top: `${coords.dataLimit.y}%`,
@@ -320,7 +332,8 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
               zIndex: computeElementZIndex('dataLimit', activeDesign),
             }}
           >
-            📊 {effectiveData}
+            <BarChart2 style={{ width: '0.95em', height: '0.95em', flexShrink: 0 }} />
+            <span>{effectiveData}</span>
           </div>
         )}
 
@@ -333,7 +346,7 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
               top: `${coords.customText1?.y ?? 91}%`,
               transform: `translate(-50%, -50%)`,
               color: activeDesign.cardTextColor || ctx.preset.cardTextColor,
-              fontSize: `${Math.max(4, Math.round(9 * scale))}px`,
+              fontSize: `${Math.max(MIN_SECONDARY_FONT_PX, Math.round(9 * scale))}px`,
               fontFamily: resolveFontStack(activeDesign.fontFamily),
               zIndex: 10,
             }}
@@ -351,7 +364,7 @@ export const VoucherCardPreview = React.memo<VoucherCardPreviewProps>(
               top: `${coords.customText2?.y ?? 96}%`,
               transform: `translate(-50%, -50%)`,
               color: activeDesign.cardTextColor || ctx.preset.cardTextColor,
-              fontSize: `${Math.max(4, Math.round(8 * scale))}px`,
+              fontSize: `${Math.max(MIN_SECONDARY_FONT_PX, Math.round(8 * scale))}px`,
               fontFamily: resolveFontStack(activeDesign.fontFamily),
               zIndex: 10,
             }}

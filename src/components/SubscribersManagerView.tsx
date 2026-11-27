@@ -193,9 +193,11 @@ export const SubscribersManagerView: React.FC<SubscribersManagerViewProps> = ({
   // Only fetch on mount if local data is empty (avoids duplicate request with setCurrentActiveTab)
   useEffect(() => {
     if (isConnected && hotspotUsers.length === 0 && pppSecrets.length === 0 && usermanUsers.length === 0) {
-      refreshData().catch(() => {});
+      refreshData().catch((err) => {
+        console.warn('Initial subscriber data refresh failed:', err);
+      });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Trigger only when connection state becomes ready with empty initial lists
   }, [isConnected]);
 
   const advancedActiveCount = useMemo(() => {
@@ -237,7 +239,9 @@ export const SubscribersManagerView: React.FC<SubscribersManagerViewProps> = ({
           if (Array.isArray(parsed) && parsed.length > 0) {
             setVisibleColumns(parsed.filter((k: string) => k !== 'actions'));
           }
-        } catch {}
+        } catch (err) {
+          console.warn('Failed to parse saved subscriber columns:', err);
+        }
       }
     };
 

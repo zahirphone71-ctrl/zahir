@@ -6,6 +6,7 @@ import {
 import { VoucherItem, VoucherDesignState } from './types';
 import { generateStandaloneVoucherHtmlAsync } from './voucherHtmlGenerator';
 import { preGenerateQrCodes } from './qrPreGenerator';
+import { autoCalcGrid } from './gridCalculator';
 import { safeStorage } from '../../utils/safeStorage';
 import { printHtmlSafely } from '../../lib/printHelper';
 import { secureFetch, safeParseJson } from '../../lib/api';
@@ -52,6 +53,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
   const [selectedBatchDetails, setSelectedBatchDetails] = useState<{ batchId: string; vouchers: VoucherItem[] } | null>(null);
   const [resumableBatches, setResumableBatches] = useState<any[]>([]);
   const [isResumingBatchId, setIsResumingBatchId] = useState<string | null>(null);
+  const [pendingExportFallback, setPendingExportFallback] = useState<{ batchId: string; vouchers: VoucherItem[] } | null>(null);
 
   // Router Audit & Reconciliation State
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
@@ -108,7 +110,9 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
       if (isMountedRef.current && res.ok && data.success && Array.isArray(data.data)) {
         setResumableBatches(data.data);
       }
-    } catch {}
+    } catch (err) {
+      console.warn('Failed to fetch resumable batches:', err);
+    }
   }, []);
 
   const handleOpenAudit = async (sType: 'HOTSPOT' | 'PPPOE' | 'USERMAN' = auditServiceType) => {
@@ -319,6 +323,90 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
     }
   };
 
+  const executeFallbackExportHtml = async (batchId: string, batchVouchers: VoucherItem[]) => {
+    const baseDesign: VoucherDesignState = design ? { ...design } : ({
+      theme: "modern",
+      paperOrientation: "portrait",
+      columnsCount: 3,
+      rowsCount: 7,
+      networkName,
+      currencySymbol,
+      loginUrl,
+      showQr: true,
+      showCutLines: true,
+      coords: {
+        network: { x: 18, y: 12 },
+        profile: { x: 50, y: 12 },
+        price: { x: 88, y: 12 },
+        user: { x: 32, y: 44 },
+        password: { x: 32, y: 68 },
+        qr: { x: 84, y: 54 },
+        time: { x: 20, y: 88 },
+        dataLimit: { x: 68, y: 88 }
+      },
+      elements: {
+        network:   { show: true, color: "#ffffff", fontSize: 13, fontFamily: "Tajawal", fontWeight: "bold", rotation: 0, hasShadow: false },
+        user:      { show: true, color: "#facc15", fontSize: 15, fontFamily: "JetBrains Mono", fontWeight: "extrabold", rotation: 0, hasShadow: false },
+        password:  { show: true, color: "#ffffff", fontSize: 13, fontFamily: "JetBrains Mono", fontWeight: "bold", rotation: 0, hasShadow: false },
+        price:     { show: true, color: "#f87171", fontSize: 12, fontFamily: "Tajawal", fontWeight: "bold", rotation: 0, hasShadow: false },
+        time:      { show: true, color: "#94a3b8", fontSize: 10, fontFamily: "Tajawal", fontWeight: "normal", rotation: 0, hasShadow: false },
+        profile:   { show: true, color: "#a5b4fc", fontSize: 11, fontFamily: "Tajawal", fontWeight: "bold", rotation: 0, hasShadow: false },
+      }
+    } as any);
+
+    const batch = batches.find(b => b.batchId === batchId);
+    const batchAuthMode = (batch?.authMode as any) || baseDesign.authMode || "user_only";
+    const effectiveDesign: VoucherDesignState = { ...baseDesign, authMode: batchAuthMode };
+    const gridInfo = autoCalcGrid({
+      cardWidthMm: effectiveDesign.cardWidthMm || 85,
+      cardHeightMm: effectiveDesign.cardHeightMm || 52,
+      paperType: effectiveDesign.paperType || 'a4',
+      paperOrientation: effectiveDesign.paperOrientation || 'portrait',
+      cardGap: effectiveDesign.cardGap ?? 4,
+      cardMarginTop: effectiveDesign.cardMarginTop ?? 5,
+      cardMarginSide: effectiveDesign.cardMarginSide ?? 4,
+      totalCards: batchVouchers.length,
+      customCols: effectiveDesign.columnsCount || 3,
+      customRows: effectiveDesign.rowsCount || 7,
+    });
+
+    const qrMap = effectiveDesign.showQr !== false
+      ? await preGenerateQrCodes(
+          batchVouchers,
+          effectiveDesign.loginUrl || loginUrl || "10.0.0.1",
+          batchAuthMode,
+          120
+        )
+      : new Map<string, string>();
+
+    const html = await generateStandaloneVoucherHtmlAsync({
+      vouchers: batchVouchers,
+      design: effectiveDesign,
+      networkName: effectiveDesign.networkName || networkName,
+      currencySymbol: effectiveDesign.currencySymbol || currencySymbol,
+      loginUrl: effectiveDesign.loginUrl || loginUrl,
+      cols: gridInfo.cols,
+      rows: gridInfo.rows,
+      theme: effectiveDesign.theme || 'modern',
+      isPos: gridInfo.isPos,
+      showCutMarks: effectiveDesign.showCutLines !== false,
+      showQr: effectiveDesign.showQr !== false,
+      showPin: batchAuthMode === "user_pass" || batchAuthMode === "user_equals_pass" || (effectiveDesign as any).sameUserPass === true,
+      qrDataUrlMap: qrMap,
+      fontScale: gridInfo.fontScale,
+      gapMm: gridInfo.gapMm,
+      paddingMm: gridInfo.paddingMm
+    });
+
+    await printHtmlSafely(html, {
+      fileName: `vouchers-${batchId}.html`,
+      onFallbackDownload: () => {
+        showToast('تم تحميل كروت الدفعة كملف HTML للطباعة', 'info');
+      }
+    });
+    showToast('تم فتح أمر الطباعة للدفعة بنجاح', 'success');
+  };
+
   const handleExportBatchHtml = async (batchId: string) => {
     try {
       showToast('جاري جلب كروت الدفعة للطباعة...', 'info');
@@ -333,73 +421,12 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
           onPrintBatch(data.vouchers, batchId);
           return;
         }
-
-        const baseDesign: VoucherDesignState = design ? { ...design } : ({
-          theme: "modern",
-          paperOrientation: "portrait",
-          columnsCount: 3,
-          rowsCount: 7,
-          networkName,
-          currencySymbol,
-          loginUrl,
-          showQr: true,
-          showCutLines: true,
-          coords: {
-            network: { x: 18, y: 12 },
-            profile: { x: 50, y: 12 },
-            price: { x: 88, y: 12 },
-            user: { x: 32, y: 44 },
-            password: { x: 32, y: 68 },
-            qr: { x: 84, y: 54 },
-            time: { x: 20, y: 88 },
-            dataLimit: { x: 68, y: 88 }
-          },
-          elements: {
-            network:   { show: true, color: "#ffffff", fontSize: 13, fontFamily: "Tajawal", fontWeight: "bold", rotation: 0, hasShadow: false },
-            user:      { show: true, color: "#facc15", fontSize: 15, fontFamily: "JetBrains Mono", fontWeight: "extrabold", rotation: 0, hasShadow: false },
-            password:  { show: true, color: "#ffffff", fontSize: 13, fontFamily: "JetBrains Mono", fontWeight: "bold", rotation: 0, hasShadow: false },
-            price:     { show: true, color: "#f87171", fontSize: 12, fontFamily: "Tajawal", fontWeight: "bold", rotation: 0, hasShadow: false },
-            time:      { show: true, color: "#94a3b8", fontSize: 10, fontFamily: "Tajawal", fontWeight: "normal", rotation: 0, hasShadow: false },
-            profile:   { show: true, color: "#a5b4fc", fontSize: 11, fontFamily: "Tajawal", fontWeight: "bold", rotation: 0, hasShadow: false },
-          }
-        } as any);
-
-        const batch = batches.find(b => b.batchId === batchId);
-        const batchAuthMode = (batch?.authMode as any) || baseDesign.authMode || "user_only";
-        const effectiveDesign: VoucherDesignState = { ...baseDesign, authMode: batchAuthMode };
-
-        const qrMap = await preGenerateQrCodes(
-          data.vouchers,
-          effectiveDesign.loginUrl || loginUrl || "10.0.0.1",
-          batchAuthMode,
-          120
-        );
-
-        const html = await generateStandaloneVoucherHtmlAsync({
-          vouchers: data.vouchers,
-          design: effectiveDesign,
-          networkName: effectiveDesign.networkName || networkName,
-          currencySymbol: effectiveDesign.currencySymbol || currencySymbol,
-          loginUrl: effectiveDesign.loginUrl || loginUrl,
-          cols: effectiveDesign.columnsCount || 3,
-          rows: effectiveDesign.rowsCount || 7,
-          theme: effectiveDesign.theme || 'modern',
-          showCutMarks: true,
-          showQr: true,
-          showPin: batchAuthMode === "user_pass" || batchAuthMode === "user_equals_pass" || (effectiveDesign as any).sameUserPass === true,
-          qrDataUrlMap: qrMap,
-          fontScale: 1.0,
-          gapMm: 4,
-          paddingMm: 4
-        });
-
-        await printHtmlSafely(html, {
-          fileName: `vouchers-${batchId}.html`,
-          onFallbackDownload: () => {
-            showToast('تم تحميل كروت الدفعة كملف HTML للطباعة', 'info');
-          }
-        });
-        showToast('تم فتح أمر الطباعة للدفعة بنجاح', 'success');
+        const unsyncedCount = data.vouchers.filter((v: VoucherItem) => !v.isSynced).length;
+        if (unsyncedCount > 0) {
+          setPendingExportFallback({ batchId, vouchers: data.vouchers });
+          return;
+        }
+        await executeFallbackExportHtml(batchId, data.vouchers);
       } else {
         showToast('لا توجد كروت في هذه الدفعة للطباعة', 'error');
       }
@@ -415,7 +442,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
   );
 
   return (
-    <div className="space-y-6 text-right font-sans" dir="rtl">
+    <div className="space-y-6 text-start font-sans" dir="rtl">
       {/* Header & Controls */}
       <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
@@ -430,20 +457,20 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
 
         <div className="flex items-center gap-3 w-full md:w-auto">
           <div className="relative flex-1 md:w-64">
-            <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
+            <Search className="w-4 h-4 text-slate-400 absolute start-3 top-2.5" />
             <input
               type="text"
               placeholder="بحث برقم الدفعة أو الباقة..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 pr-9 pl-3 py-2 rounded-xl text-xs text-white outline-none focus:border-indigo-500"
+              className="w-full bg-slate-950 border border-slate-800 ps-9 pe-3 py-2 rounded-xl text-xs text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus:border-indigo-500"
             />
           </div>
 
           <button
             type="button"
             onClick={() => handleOpenAudit(auditServiceType)}
-            className="px-3.5 py-2 bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-indigo-600/30 hover:from-indigo-600/40 hover:to-purple-600/40 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-950/40"
+            className="px-3.5 py-2 bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-indigo-600/30 hover:from-indigo-600/40 hover:to-purple-600/40 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             title="مراجعة ومطابقة كروت الراوتر مع المخزون وتصنيف الكروت غير المسجلة حسب تاريخ الحقن"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
@@ -454,7 +481,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
             type="button"
             onClick={fetchBatches}
             disabled={loading}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-indigo-400' : ''}`} />
             <span>تحديث</span>
@@ -467,7 +494,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
         <div className="bg-gradient-to-r from-amber-950/70 via-amber-900/40 to-slate-900 border border-amber-500/50 rounded-2xl p-5 shadow-xl space-y-3 animate-in fade-in duration-300">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 shrink-0">
-              <AlertCircle className="w-6 h-6 animate-pulse" />
+              <AlertCircle className="w-6 h-6" />
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold text-amber-200">
@@ -488,11 +515,11 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs font-bold text-white">{rb.batchId}</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold">
+                    <span className="text-xs px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold">
                       متبقي: {rb.unsyncedCards} من {rb.totalCards}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-xs text-slate-400">
                     باقة: {rb.profileName} | الخدمة: {rb.serviceType} {rb.comment ? `(${rb.comment})` : ''}
                   </p>
                 </div>
@@ -546,7 +573,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                       <span className="font-mono font-black text-sm text-indigo-400">
                         {b.batchId}
                       </span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700">
                         {b.serviceType || 'HOTSPOT'}
                       </span>
                     </div>
@@ -556,7 +583,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                   </div>
 
                   <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border ${
                       isSynced
                         ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800'
                         : 'bg-amber-950/60 text-amber-300 border-amber-800'
@@ -577,25 +604,25 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                 </div>
 
                 {/* Stats */}
-                <div className="grid grid-cols-3 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800/80 text-center font-mono">
+                <div className="grid grid-cols-3 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800/80 text-center font-mono tabular-nums">
                   <div>
-                    <div className="text-[10px] text-slate-500 font-sans">الإجمالي</div>
+                    <div className="text-xs text-slate-400 font-sans">الإجمالي</div>
                     <div className="text-sm font-black text-white">{totalCount}</div>
                   </div>
                   <div>
-                    <div className="text-[10px] text-slate-500 font-sans">المتاح</div>
+                    <div className="text-xs text-slate-400 font-sans">المتاح</div>
                     <div className="text-sm font-black text-emerald-400">{activeCount}</div>
                   </div>
                   <div>
-                    <div className="text-[10px] text-slate-500 font-sans">المستخدم</div>
+                    <div className="text-xs text-slate-400 font-sans">المستخدم</div>
                     <div className="text-sm font-black text-slate-400">{usedCount}</div>
                   </div>
                 </div>
 
                 {/* Date and Comments */}
-                <div className="flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-800/60 pt-3">
+                <div className="flex items-center justify-between text-xs text-slate-400 border-t border-slate-800/60 pt-3">
                   <div className="flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-slate-500" />
+                    <Clock className="w-3 h-3 text-slate-400" />
                     <span>{new Date(b.createdAt).toLocaleString('ar-YE', { dateStyle: 'short', timeStyle: 'short' })}</span>
                   </div>
                   {b.comment && (
@@ -611,47 +638,51 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                     type="button"
                     disabled={loadingBatchCardsId === b.batchId}
                     onClick={() => handleViewBatchCards(b.batchId)}
-                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border border-slate-700 disabled:opacity-50"
+                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border border-slate-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                     title="استعراض الكروت"
+                    aria-label="استعراض الكروت"
                   >
-                    <Eye className={`w-3.5 h-3.5 text-blue-400 ${loadingBatchCardsId === b.batchId ? 'animate-pulse' : ''}`} />
-                    <span className="hidden sm:inline text-[11px]">{loadingBatchCardsId === b.batchId ? '...' : 'عرض'}</span>
+                    <Eye className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="hidden sm:inline text-xs">{loadingBatchCardsId === b.batchId ? '...' : 'عرض'}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleExportBatchHtml(b.batchId)}
-                    className="p-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                    className="p-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                     title="طباعة الدفعة / PDF"
+                    aria-label="طباعة الدفعة"
                   >
                     <Printer className="w-3.5 h-3.5 text-indigo-400" />
-                    <span className="hidden sm:inline text-[11px]">طباعة</span>
+                    <span className="hidden sm:inline text-xs">طباعة</span>
                   </button>
 
                   <button
                     type="button"
                     disabled={syncingBatchId === b.batchId || isSynced}
                     onClick={() => handleSyncBatch(b)}
-                    className={`p-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
+                    className={`p-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                       isSynced
                         ? 'bg-slate-800/40 text-slate-500 border-slate-800 opacity-50 cursor-not-allowed'
                         : 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border-emerald-500/30'
                     }`}
                     title="مزامنة مع المايكروتك"
+                    aria-label="مزامنة مع المايكروتك"
                   >
                     <Server className={`w-3.5 h-3.5 ${syncingBatchId === b.batchId ? 'animate-spin' : ''}`} />
-                    <span className="hidden sm:inline text-[11px]">{syncingBatchId === b.batchId ? 'مزامنة..' : 'مزامنة'}</span>
+                    <span className="hidden sm:inline text-xs">{syncingBatchId === b.batchId ? 'مزامنة..' : 'مزامنة'}</span>
                   </button>
 
                   <button
                     type="button"
                     disabled={deletingBatchId === b.batchId}
                     onClick={() => handleDeleteBatch(b.batchId)}
-                    className="p-2 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                    className="p-2 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                     title="حذف الدفعة"
+                    aria-label="حذف الدفعة"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline text-[11px]">حذف</span>
+                    <span className="hidden sm:inline text-xs">حذف</span>
                   </button>
                 </div>
               </div>
@@ -702,7 +733,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                     title="حقن الكروت المعلقة غير المحقونة في راوتر المايكروتك بنقرة واحدة"
                   >
                     <Server className={`w-3.5 h-3.5 ${syncingBatchId === selectedBatchDetails.batchId ? 'animate-spin' : ''}`} />
-                    <span>⚡ إكمال حقن الكروت المعلقة ({selectedBatchDetails.vouchers.filter(v => !v.isSynced).length})</span>
+                    <span>إكمال حقن الكروت المعلقة ({selectedBatchDetails.vouchers.filter(v => !v.isSynced).length})</span>
                   </button>
                 )}
 
@@ -734,7 +765,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                       v.isSynced ? 'border-slate-800 hover:border-slate-700' : 'border-amber-800/60 bg-amber-950/10'
                     }`}
                   >
-                    <div className="text-[10px] text-slate-500 font-sans flex justify-between items-center">
+                    <div className="text-xs text-slate-400 font-sans flex justify-between items-center">
                       <span>{v.profileName}</span>
                       <span className="text-emerald-400 font-bold">{v.price} {currencySymbol}</span>
                     </div>
@@ -742,21 +773,21 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                       {v.voucherCode}
                     </div>
                     {v.voucherPin && v.voucherPin !== v.voucherCode && (
-                      <div className="text-[11px] text-slate-400 font-bold">
+                      <div className="text-xs text-slate-400 font-bold">
                         PIN: {v.voucherPin}
                       </div>
                     )}
-                    <div className="flex items-center justify-between text-[9px] pt-1 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
                       {v.isSynced ? (
                         <span className="text-emerald-400 font-bold flex items-center gap-0.5">
-                          <CheckCircle2 className="w-2.5 h-2.5" /> محقون
+                          <CheckCircle2 className="w-3 h-3" /> محقون
                         </span>
                       ) : (
-                        <span className="text-amber-400 font-bold flex items-center gap-0.5 animate-pulse">
-                          <AlertCircle className="w-2.5 h-2.5" /> غير محقون
+                        <span className="text-amber-400 font-bold flex items-center gap-0.5">
+                          <AlertCircle className="w-3 h-3" /> غير محقون
                         </span>
                       )}
-                      <span className="text-slate-500 font-sans">{v.timeLimit || 'محدد'}</span>
+                      <span className="text-slate-400 font-sans">{v.timeLimit || 'محدد'}</span>
                     </div>
                   </div>
                 ))}
@@ -777,9 +808,9 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                   <ShieldCheck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    <h3 className="text-base font-black text-white flex items-center gap-2">
                     <span>مراجعة ومطابقة كروت الراوتر مع المخزون</span>
-                    <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">
+                    <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">
                       Router Audit
                     </span>
                   </h3>
@@ -800,7 +831,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                         setAuditServiceType(srv);
                         handleOpenAudit(srv);
                       }}
-                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                         auditServiceType === srv
                           ? 'bg-indigo-600 text-white'
                           : 'text-slate-400 hover:text-white'
@@ -814,7 +845,8 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsAuditModalOpen(false)}
-                  className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
+                  aria-label="إغلاق نافذة المطابقة"
+                  className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -827,7 +859,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                 <div className="py-16 text-center space-y-3">
                   <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin mx-auto" />
                   <p className="text-sm font-bold text-slate-300">جاري قراءة كروت المايكروتك ومطابقتها مع المخزون...</p>
-                  <p className="text-xs text-slate-500">يتم فحص أكواد الكروت، تواريخ الحقن، والبروفايلات</p>
+                  <p className="text-xs text-slate-400">يتم فحص أكواد الكروت، تواريخ الحقن، والبروفايلات</p>
                 </div>
               ) : auditData ? (
                 <>
@@ -835,20 +867,20 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                       <span className="text-xs text-slate-400 font-bold">إجمالي الكروت بالمايكروتك</span>
-                      <div className="text-2xl font-black text-white font-mono">{auditData.summary.totalRouterUsers}</div>
-                      <span className="text-[10px] text-slate-500">حسابات نشطة بالراوتر</span>
+                      <div className="text-2xl font-black text-white font-mono tabular-nums">{auditData.summary.totalRouterUsers}</div>
+                      <span className="text-xs text-slate-400">حسابات نشطة بالراوتر</span>
                     </div>
 
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                       <span className="text-xs text-emerald-400 font-bold">متطابقة ومسجلة في المخزون</span>
-                      <div className="text-2xl font-black text-emerald-400 font-mono">{auditData.summary.matchedWithInventory}</div>
-                      <span className="text-[10px] text-emerald-500/80">موجودة في الدفعات والمخزون</span>
+                      <div className="text-2xl font-black text-emerald-400 font-mono tabular-nums">{auditData.summary.matchedWithInventory}</div>
+                      <span className="text-xs text-emerald-400/90">موجودة في الدفعات والمخزون</span>
                     </div>
 
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                       <span className="text-xs text-amber-400 font-bold">موجودة بالراوتر وغير مسجلة</span>
-                      <div className="text-2xl font-black text-amber-400 font-mono">{auditData.summary.unmappedCount}</div>
-                      <span className="text-[10px] text-amber-500/80">غير موجودة بالمخزون المحلي</span>
+                      <div className="text-2xl font-black text-amber-400 font-mono tabular-nums">{auditData.summary.unmappedCount}</div>
+                      <span className="text-xs text-amber-400/90">غير موجودة بالمخزون المحلي</span>
                     </div>
                   </div>
 
@@ -912,7 +944,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                                         {group.count} كرت
                                       </span>
                                     </div>
-                                    <span className="text-[11px] text-slate-400">
+                                    <span className="text-xs text-slate-400">
                                       انقر لعرض تفاصيل الكروت التابعة لهذا التاريخ
                                     </span>
                                   </div>
@@ -923,7 +955,7 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                                     type="button"
                                     disabled={isImporting}
                                     onClick={() => handleImportGroup(group)}
-                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md disabled:opacity-50"
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
                                     title="استيراد هذه الكروت إلى إدارة الدفعات والمخزون كدفعة جديدة"
                                   >
                                     {isImporting ? (
@@ -937,7 +969,8 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => toggleDateExpanded(group.date)}
-                                    className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-all"
+                                    aria-label={isExpanded ? 'طي المجموعة' : 'توسيع المجموعة'}
+                                    className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                                   >
                                     {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                                   </button>
@@ -955,15 +988,15 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
                                       >
                                         <div className="flex items-center justify-between">
                                           <span className="font-black text-amber-300 font-mono tracking-wider">{c.name}</span>
-                                          <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded font-sans">
+                                          <span className="text-xs text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded font-sans">
                                             {c.profile}
                                           </span>
                                         </div>
                                         {c.password && c.password !== c.name && (
-                                          <div className="text-[11px] text-slate-400">PIN: {c.password}</div>
+                                          <div className="text-xs text-slate-400">PIN: {c.password}</div>
                                         )}
                                         {c.comment && (
-                                          <div className="text-[10px] text-slate-500 truncate font-sans" title={c.comment}>
+                                          <div className="text-xs text-slate-400 truncate font-sans" title={c.comment}>
                                             {c.comment}
                                           </div>
                                         )}
@@ -1012,6 +1045,21 @@ export const BatchesManagerTab: React.FC<BatchesManagerTabProps> = ({
         isLoading={!!deletingBatchId}
         onConfirm={handleExecuteDeleteBatch}
         onClose={() => setBatchToDelete(null)}
+      />
+
+      <ConfirmModal
+        isOpen={!!pendingExportFallback}
+        title="تنبيه: هذه الدفعة غير محقونة بالمايكروتك"
+        message="تحتوي هذه الدفعة على كروت لم تُحقن بعد في راوتر المايكروتك. هل تريد طباعتها على أي حال؟"
+        confirmText="نعم، متابعة الطباعة"
+        cancelText="إلغاء"
+        type="warning"
+        onConfirm={() => {
+          const item = pendingExportFallback;
+          setPendingExportFallback(null);
+          if (item) void executeFallbackExportHtml(item.batchId, item.vouchers);
+        }}
+        onClose={() => setPendingExportFallback(null)}
       />
     </div>
   );

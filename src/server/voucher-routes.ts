@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router, type Request, type Response } from 'express';
 import { voucherDb } from './voucher-db.ts';
 import { generateVouchersBatch, generateSingleCode, generateCustomVoucher } from './voucher-generator.ts';
@@ -6,6 +7,7 @@ import { LAYOUT_OPTIONS, type GenerateOptions, type VoucherItem, type BatchInfo 
 import { renderVouchersFullHtml } from '../client/voucher-render.ts';
 import { telegramAlertService } from './telegram-service.ts';
 import { recordAudit } from './rbac.ts';
+import { appLogger } from './rotatingLogger.ts';
 
 export function createVoucherRoutes(getClient: (req: Request) => any): Router {
   const router = Router();
@@ -207,7 +209,9 @@ export function createVoucherRoutes(getClient: (req: Request) => any): Router {
                   if (Array.isArray(created) && created[0]?.['.id']) {
                     await client.query(`${umPrefix}/user/remove`, [`=.id=${created[0]['.id']}`]);
                   }
-                } catch {}
+                } catch (cleanupErr: any) {
+                  appLogger.warn('VoucherRoutes', 'Cleanup created User Manager user failed', { code: cleanCode, error: cleanupErr?.message });
+                }
                 throw new Error(`فشل ربط البروفايل (${cleanProfile}) في اليوزر مانجر: ${profErr.message}`);
               }
             }
@@ -231,7 +235,9 @@ export function createVoucherRoutes(getClient: (req: Request) => any): Router {
           if (genResult.batchId) {
             try {
               voucherDb.deleteBatch(genResult.batchId);
-            } catch {}
+            } catch (rbErr: any) {
+              appLogger.warn('VoucherRoutes', 'Rollback local batch failed after sync error', { batchId: genResult.batchId, error: rbErr?.message });
+            }
           }
           return res.status(500).json({
             success: false,
@@ -242,7 +248,9 @@ export function createVoucherRoutes(getClient: (req: Request) => any): Router {
         if (genResult.batchId) {
           try {
             voucherDb.deleteBatch(genResult.batchId);
-          } catch {}
+          } catch (rbErr: any) {
+            appLogger.warn('VoucherRoutes', 'Rollback local batch failed when router disconnected', { batchId: genResult.batchId, error: rbErr?.message });
+          }
         }
         return res.status(400).json({
           success: false,
@@ -662,7 +670,9 @@ export function createVoucherRoutes(getClient: (req: Request) => any): Router {
             if (!isNaN(d.getTime())) {
               return { dateStr: d.toISOString().slice(0, 10) };
             }
-          } catch {}
+          } catch (dateErr: any) {
+            appLogger.warn('VoucherRoutes', 'Invalid ISO date in voucher comment', { error: dateErr?.message });
+          }
         }
 
         const ymdMatch = comment.match(/(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/);
@@ -749,10 +759,10 @@ export function createVoucherRoutes(getClient: (req: Request) => any): Router {
 
       const now = new Date();
       const dateTag = targetDate && targetDate !== 'غير محدد التاريخ' ? targetDate : now.toISOString().slice(0, 10);
-      const batchId = `IMP-${dateTag.replace(/-/g, '')}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const batchId = `IMP-${dateTag.replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
       const voucherItems: VoucherItem[] = cards.map((c: any, idx: number) => ({
-        voucherId: `imp-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+        voucherId: `imp-${Date.now()}-${idx}-${crypto.randomBytes(4).toString('hex')}`,
         voucherCode: String(c.name || '').trim(),
         voucherPin: String(c.password ?? '').trim(),
         statusCd: c.disabled ? 'DISABLED' : 'ACTIVE',

@@ -3,11 +3,11 @@
 
 @layer base {
   :root {
-    --app-font-family: 'Alexandria', 'Cairo', 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --app-font-family: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
     --app-font-scale: 100%;
+    --app-base-font-size: 16px;
     --app-watermark-opacity: 0.07;
 
-    /* ZCtrl Governing Specification v5.0.0 (Section 8.2 Design Tokens) */
     /* خلفيات السطوح - السمة الفاتحة */
     --color-bg: #ffffff;
     --color-bg-subtle: #f8fafc;
@@ -16,12 +16,12 @@
     /* النصوص والتباين */
     --color-fg: #0f172a;           /* تباين 17.85:1 */
     --color-fg-secondary: #475569; /* تباين 7.58:1 */
-    --color-fg-muted: #64748b;     /* تباين 4.76:1 */
-    --color-fg-disabled: #94a3b8;
+    --color-fg-muted: #526071;     /* تباين >= 6:1 */
+    --color-fg-disabled: #64748b;
 
     /* الحدود وعناصر التحكم */
-    --color-border: #e2e8f0;
-    --color-border-control: #64748b; /* لتحقيق نسبة 3:1 المطلوبة */
+    --color-border: #cbd5e1;
+    --color-border-control: #64748b; /* لتحقيق نسبة >= 3:1 المطلوبة */
 
     /* الألوان الأساسية والتفاعلية */
     --color-primary: #2563eb;
@@ -70,17 +70,41 @@
     --color-primary-subtle: #172554;
   }
 
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+    font-size: var(--app-base-font-size, var(--app-font-scale, 100%));
+  }
+
   html, body {
     margin: 0;
     padding: 0;
-    background-color: #020617;
-    color: #f8fafc;
-    font-family: var(--app-font-family);
-    font-size: var(--app-font-scale);
+    background-color: var(--color-slate-950, #070a13);
+    color: var(--color-slate-100, #f1f5f9);
+    font-family: var(--app-theme-font, var(--app-font-family));
+    letter-spacing: -0.015em;
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  table, td, th {
+    font-variant-numeric: tabular-nums;
+  }
+
+  button, input, select, textarea {
+    font-family: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
   }
 }
 
@@ -106,19 +130,7 @@
   }
 }
 
-@keyframes logoShinePulse {
-  0%, 100% {
-    transform: scale(1);
-    filter: drop-shadow(0 4px 14px rgba(245, 158, 11, 0.25)) brightness(1);
-  }
-  50% {
-    transform: scale(1.025);
-    filter: drop-shadow(0 6px 20px rgba(56, 189, 248, 0.4)) brightness(1.08);
-  }
-}
-
 .animate-zctrl-logo {
-  animation: logoShinePulse 4s ease-in-out infinite;
   transform-origin: center;
 }
 
@@ -162,40 +174,7 @@
   background: rgba(100, 116, 139, 1);
 }
 
-@layer base {
-  html {
-    color-scheme: dark;
-    -webkit-tap-highlight-color: transparent;
-  }
-  
-  body {
-    font-family: 'Alexandria', 'Cairo', 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    letter-spacing: -0.015em;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    background-color: #070a13;
-    color: #f1f5f9;
-  }
-  
-  code, pre, .font-mono {
-    font-family: 'JetBrains Mono', 'Plus Jakarta Sans', monospace;
-    font-variant-numeric: tabular-nums;
-  }
-
-  table, td, th {
-    font-variant-numeric: tabular-nums;
-  }
-
-  button, input, select, textarea {
-    font-family: inherit;
-  }
-
-  :focus-visible {
-    outline: 2px solid #3b82f6;
-    outline-offset: 2px;
-  }
-}
+/* Unified base styles consolidated above */
 
 /* Custom Sleek Desktop Scrollbars */
 ::-webkit-scrollbar {
@@ -247,9 +226,9 @@
   --app-theme-bg-sidebar: #0c1222;
   --app-theme-border: #1e293b;
   --app-theme-text-main: #f1f5f9;
-  --app-theme-text-muted: #60a5fa;
+  --app-theme-text-muted: #94a3b8;
   --app-theme-radius: 0.75rem;
-  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(59, 130, 246, 0.25) 0%, rgba(29, 78, 216, 0.1) 100%);
 }
@@ -264,9 +243,9 @@
   --app-theme-bg-sidebar: #0f1118;
   --app-theme-border: #78350f;
   --app-theme-text-main: #fef3c7;
-  --app-theme-text-muted: #d97706;
+  --app-theme-text-muted: #f59e0b;
   --app-theme-radius: 1rem;
-  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #f59e0b 0%, #b45309 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(245, 158, 11, 0.3) 0%, rgba(180, 83, 9, 0.1) 100%);
 }
@@ -283,7 +262,7 @@
   --app-theme-text-main: #e0f2fe;
   --app-theme-text-muted: #38bdf8;
   --app-theme-radius: 0.375rem;
-  --app-theme-font: 'Inter', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'JetBrains Mono Variable', system-ui, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #06b6d4 0%, #7e22ce 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(6, 182, 212, 0.3) 0%, rgba(126, 34, 206, 0.15) 100%);
 }
@@ -300,7 +279,7 @@
   --app-theme-text-main: #ecfdf5;
   --app-theme-text-muted: #34d399;
   --app-theme-radius: 1.25rem;
-  --app-theme-font: 'Tajawal', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #10b981 0%, #047857 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(16, 185, 129, 0.3) 0%, rgba(4, 120, 87, 0.1) 100%);
 }
@@ -317,7 +296,7 @@
   --app-theme-text-main: #ffe4e6;
   --app-theme-text-muted: #fb7185;
   --app-theme-radius: 0.875rem;
-  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #f43f5e 0%, #be123c 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(244, 63, 94, 0.3) 0%, rgba(190, 18, 60, 0.1) 100%);
 }
@@ -334,7 +313,7 @@
   --app-theme-text-main: #f5f3ff;
   --app-theme-text-muted: #a78bfa;
   --app-theme-radius: 1.5rem;
-  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(139, 92, 246, 0.3) 0%, rgba(109, 40, 217, 0.1) 100%);
 }
@@ -351,7 +330,7 @@
   --app-theme-text-main: #ffffff;
   --app-theme-text-muted: #94a3b8;
   --app-theme-radius: 0.875rem;
-  --app-theme-font: 'Cairo', sans-serif;
+  --app-theme-font: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif;
   --app-theme-button-gradient: linear-gradient(135deg, #0284c7 0%, #4338ca 100%);
   --app-theme-sidebar-active: linear-gradient(90deg, rgba(56, 189, 248, 0.25) 0%, rgba(67, 56, 202, 0.12) 100%);
 }
@@ -360,7 +339,7 @@
 :root[data-app-theme] {
   /* Structural Variables Mapping */
   --font-sans: var(--app-theme-font) !important;
-  --font-mono: 'JetBrains Mono', 'Plus Jakarta Sans', monospace !important;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', monospace !important;
   
   --tr-stripe: #f8fafc;
   --nav-active: linear-gradient(90deg, rgba(37,99,235,.1), transparent);
@@ -378,7 +357,7 @@
   --color-slate-700: var(--app-theme-border) !important;
   
   --color-slate-400: var(--app-theme-text-muted) !important;
-  --color-slate-300: var(--app-theme-text-muted) !important;
+  --color-slate-300: #cbd5e1 !important;
   --color-slate-200: var(--app-theme-text-main) !important;
   --color-slate-100: var(--app-theme-text-main) !important;
   --color-slate-50: var(--app-theme-text-main) !important;
@@ -400,12 +379,6 @@
   --radius-3xl: calc(var(--app-theme-radius) * 1.5) !important;
 }
 
-body {
-  background-color: var(--color-slate-950) !important;
-  color: var(--color-slate-100) !important;
-  font-family: var(--app-theme-font) !important;
-}
-
 #main-content-canvas {
   background-color: var(--color-slate-950) !important;
 }
@@ -417,7 +390,8 @@ body {
 .border-slate-800, .border-slate-800\/80, .border-slate-800\/60 { border-color: var(--color-slate-800) !important; }
 .border-slate-700, .border-slate-700\/80 { border-color: var(--color-slate-700) !important; }
 
-.text-slate-100, .text-slate-200, .text-slate-300 { color: var(--color-slate-100) !important; }
+.text-slate-100, .text-slate-200 { color: var(--color-slate-100) !important; }
+.text-slate-300 { color: var(--color-slate-300) !important; }
 .text-slate-400, .text-slate-500 { color: var(--color-slate-400) !important; }
 
 /* Force primary gradient everywhere the app uses blue/indigo gradients */
@@ -430,22 +404,23 @@ body {
   box-shadow: 0 10px 15px -3px var(--app-theme-glow), 0 4px 6px -4px var(--app-theme-glow) !important;
 }
 
-/* Light Mode Overrides for clean_pearl */
+/* Light Mode Overrides for clean_pearl (WCAG AA >= 4.5:1 muted text & >= 3:1 control borders) */
 :root.light-mode {
-  --color-slate-950: #f8fafc !important; 
-  --color-slate-900: #ffffff !important; 
-  --color-slate-800: #e2e8f0 !important; 
-  --color-slate-700: #cbd5e1 !important; 
-  
-  --color-slate-400: #64748b !important; 
-  --color-slate-300: #475569 !important; 
-  --color-slate-200: #334155 !important;
-  --color-slate-100: #0f172a !important; 
+  color-scheme: light;
+  --color-slate-950: #f8fafc !important;
+  --color-slate-900: #ffffff !important;
+  --color-slate-800: #cbd5e1 !important;
+  --color-slate-700: #94a3b8 !important;
+
+  --color-slate-400: #475569 !important;
+  --color-slate-300: #334155 !important;
+  --color-slate-200: #1e293b !important;
+  --color-slate-100: #0f172a !important;
   --color-slate-50: #020617 !important;
 }
 
 .light-mode .bg-slate-900 {
-  box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.05) !important;
+  box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.06) !important;
 }
 
 .light-mode .bg-slate-950\/60,
@@ -459,7 +434,7 @@ body {
 .light-mode textarea {
   background-color: #ffffff !important;
   color: #0f172a !important;
-  border-color: #cbd5e1 !important;
+  border-color: #64748b !important;
 }
 
 /* ════════ Deep Void (True Black #000000 & High-Contrast Icons for Extended Night Eye Comfort) ════════ */
@@ -532,6 +507,14 @@ body {
 /* ════════ 10) إمكانية الوصول ════════ */
 @media (prefers-reduced-motion: reduce) {
   .animate-zctrl-title,
+  .animate-zctrl-logo,
+  .shimmer-gold,
+  .skeleton,
+  .animate-pulse,
+  .animate-bounce,
+  .animate-float,
+  .animate-pulse-glow,
+  .animate-pulse-slow,
   :root[data-app-theme="cyber_matrix"] body::after { animation: none !important; }
   *, ::before, ::after {
     /* 0.01ms وليس 0s — حتى تظل أحداث transitionend/animationend تُطلق

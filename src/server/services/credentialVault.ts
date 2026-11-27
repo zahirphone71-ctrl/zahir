@@ -1,12 +1,14 @@
 // ============================================================
-// مخزن بيانات الاعتماد المشفر وإدارة الجلسات السحابية
-// Credential Vault with In-Memory Sessions & Debounced Persistence (إصلاح 1)
+// مخزن بيانات الاعتماد المشفر وإدارة الجلسات
+// Credential Vault with AES-256-GCM, CBC Migration & Atomic 0o600 Writes
 // ============================================================
 
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { logger } from './logger.ts';
+import { encryptSecret, decryptSecret } from '../security-shield.ts';
+import { writeJsonAtomic } from '../tlsPinStore.ts';
 import type { VendorSession, VendorConnectConfig } from './vendors/types.ts';
 
 interface VaultEntry {
@@ -17,7 +19,7 @@ interface VaultEntry {
   model?: string;
   username: string;
   encPass: string;
-  iv: string;
+  iv?: string; // Only present on legacy CBC records prior to auto-migration
   port: number;
   useHttps: boolean;
   lastTestResult?: string;
@@ -30,17 +32,19 @@ interface VaultSessionEntry {
   vendorHandler: string;
 }
 
-const VAULT_DIR = process.env.ZCTRL_DATA_DIR || path.join(process.cwd(), '.zctrl_data');
-const VAULT_FILE = path.join(VAULT_DIR, 'ap_vault.json');
-const SECRET_KEY = crypto.createHash('sha256').update(process.env.AP_VAULT_KEY || 'zctrl-ap-default-secret-key-2026').digest();
-
-class CredentialVault {
+export class CredentialVault {
+  private readonly vaultDir: string;
+  private readonly vaultFile: string;
+  private readonly legacyKey?: string;
   private entries = new Map<string, VaultEntry>();
-  // إصلاح 1: الجلسات في الذاكرة فقط لتجنب I/O Bottleneck
   private sessions = new Map<string, VaultSessionEntry>();
   private persistTimer: NodeJS.Timeout | null = null;
+  private cleanupTimer: NodeJS.Timeout | null = null;
 
-  constructor() {
+  constructor(customDataDir?: string, options?: { legacyCbcKey?: string }) {
+    this.vaultDir = customDataDir || process.env.ZCTRL_DATA_DIR || path.join(process.cwd(), '.zctrl_data');
+    this.vaultFile = path.join(this.vaultDir, 'ap_vault.json');
+    this.legacyKey = options?.legacyCbcKey;
     this.ensureDir();
     this.loadFromDisk();
     this.startSessionCleanup();
@@ -48,45 +52,57 @@ class CredentialVault {
 
   private ensureDir() {
     try {
-      if (!fs.existsSync(VAULT_DIR)) {
-        fs.mkdirSync(VAULT_DIR, { recursive: true });
+      if (!fs.existsSync(this.vaultDir)) {
+        fs.mkdirSync(this.vaultDir, { recursive: true });
       }
-    } catch {}
+    } catch (err: any) {
+      logger.warn('Vault', 'فشل إنشاء مجلد الخزنة', err?.message);
+    }
   }
 
-  private encrypt(text: string): { enc: string; iv: string } {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', SECRET_KEY, iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    return { enc: encrypted, iv: iv.toString('hex') };
-  }
-
-  private decrypt(enc: string, ivHex: string): string | null {
+  /**
+   * Decrypts legacy AES-256-CBC records only during migration using env/explicit key (zero hardcoded keys).
+   */
+  private decryptLegacy(enc: string, ivHex: string): string | null {
+    const keySource = this.legacyKey || process.env.AP_VAULT_KEY || process.env.APP_ENCRYPTION_KEY || '';
+    if (!keySource || !enc || !ivHex) return null;
     try {
+      const legacyKeyBuf = crypto.createHash('sha256').update(keySource).digest();
       const iv = Buffer.from(ivHex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-cbc', SECRET_KEY, iv);
+      const decipher = crypto.createDecipheriv('aes-256-cbc', legacyKeyBuf, iv);
       let decrypted = decipher.update(enc, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
       return decrypted;
     } catch (e: any) {
-      logger.error('Vault', 'فشل فك التشفير', e.message);
+      logger.error('Vault', 'فشل فك التشفير للبيانات القديمة', e.message);
       return null;
     }
   }
 
   private loadFromDisk() {
     try {
-      if (fs.existsSync(VAULT_FILE)) {
-        const raw = fs.readFileSync(VAULT_FILE, 'utf8');
+      if (fs.existsSync(this.vaultFile)) {
+        const raw = fs.readFileSync(this.vaultFile, 'utf8');
         const list: VaultEntry[] = JSON.parse(raw);
+        let migrated = false;
         if (Array.isArray(list)) {
           this.entries.clear();
           for (const item of list) {
             if (item && item.mac) {
+              if (item.iv) {
+                const plain = this.decryptLegacy(item.encPass, item.iv);
+                if (plain !== null) {
+                  item.encPass = encryptSecret(plain);
+                  delete item.iv;
+                  migrated = true;
+                }
+              }
               this.entries.set(item.mac.toLowerCase(), item);
             }
           }
+        }
+        if (migrated) {
+          this.persistToDisk();
         }
       }
     } catch (e: any) {
@@ -100,13 +116,14 @@ class CredentialVault {
       this.persistToDisk();
       this.persistTimer = null;
     }, 1500);
+    if (this.persistTimer.unref) this.persistTimer.unref();
   }
 
-  private persistToDisk() {
+  public persistToDisk() {
     try {
       this.ensureDir();
       const list = Array.from(this.entries.values());
-      fs.writeFileSync(VAULT_FILE, JSON.stringify(list, null, 2), 'utf8');
+      writeJsonAtomic(this.vaultFile, list);
     } catch (e: any) {
       logger.error('Vault', 'فشل حفظ بيانات الاعتماد على القرص', e.message);
     }
@@ -123,7 +140,7 @@ class CredentialVault {
     useHttps?: boolean;
   }) {
     const macKey = data.mac.toLowerCase();
-    const { enc, iv } = this.encrypt(data.password);
+    const enc = encryptSecret(data.password);
     const existing = this.entries.get(macKey);
 
     const entry: VaultEntry = {
@@ -134,7 +151,6 @@ class CredentialVault {
       model: data.model || existing?.model || '',
       username: data.username,
       encPass: enc,
-      iv: iv,
       port: data.port || (data.useHttps ? 443 : 80),
       useHttps: !!data.useHttps,
       lastTestResult: existing?.lastTestResult,
@@ -145,29 +161,41 @@ class CredentialVault {
     this.entries.set(macKey, entry);
     this.schedulePersist();
     logger.info('Vault', `تم حفظ بيانات اعتماد ${data.mac} (${data.ip})`);
-    return entry;
+    const { encPass: _ignored, iv: _ignoredIv, ...safeMeta } = entry;
+    return safeMeta;
   }
 
   getConnectConfig(mac: string): VendorConnectConfig | null {
     if (!mac) return null;
     const e = this.entries.get(mac.toLowerCase());
     if (!e) return null;
-    const p = this.decrypt(e.encPass, e.iv);
-    if (p === null) {
+
+    let plain: string | null = null;
+    if (e.iv) {
+      plain = this.decryptLegacy(e.encPass, e.iv);
+      if (plain !== null) {
+        e.encPass = encryptSecret(plain);
+        delete e.iv;
+        this.schedulePersist();
+      }
+    } else {
+      plain = decryptSecret(e.encPass);
+    }
+
+    if (plain === null) {
       logger.error('Vault', `فشل فك تشفير ${mac}`);
       return null;
     }
+
     return {
       ip: e.ip,
       username: e.username,
-      password: p,
+      password: plain,
       port: e.port,
       useHttps: e.useHttps,
       timeoutMs: 8000
     };
   }
-
-  // ===== إصلاح 1: إدارة الجلسات في الذاكرة فقط =====
 
   saveSession(mac: string, session: VendorSession, vendorHandler: string) {
     if (!mac) return;
@@ -192,9 +220,6 @@ class CredentialVault {
     this.sessions.delete(mac.toLowerCase());
   }
 
-  private cleanupTimer: NodeJS.Timeout | null = null;
-
-  /** تنظيف الجلسات المنتهية (كل دقيقة) */
   startSessionCleanup() {
     if (this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => {
@@ -214,6 +239,11 @@ class CredentialVault {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
+    }
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+      this.persistToDisk();
     }
   }
 

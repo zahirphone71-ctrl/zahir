@@ -1,9 +1,10 @@
 // ============================================================
-// نظام تسجيل إنتاجي - ملفات دورانية (إصلاح 6)
+// Unified Logger Facade delegating to appLogger (rotatingLogger.ts)
 // ============================================================
 
-import fs from 'fs';
-import path from 'path';
+import { appLogger, type StructuredLogEntry } from '../rotatingLogger.ts';
+
+export { appLogger };
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -12,176 +13,76 @@ export interface LogEntry {
   level: LogLevel;
   mod: string;
   msg: string;
-  data?: any;
+  data?: unknown;
 }
 
-const LOG_DIR = process.env.ZCTRL_LOG_DIR || (process.env.ZCTRL_DATA_DIR ? path.join(process.env.ZCTRL_DATA_DIR, 'logs') : path.join(process.cwd(), 'logs'));
-const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB لكل ملف
-const MAX_FILES = 5;
-const MAX_MEMORY = 300;
+function toLegacyEntry(entry: StructuredLogEntry): LogEntry {
+  return {
+    ts: entry.timestamp,
+    level: entry.level.toLowerCase() as LogLevel,
+    mod: entry.module,
+    msg: entry.message,
+    ...(entry.meta !== undefined ? { data: entry.meta } : {})
+  };
+}
 
-const MAX_PENDING_DISK = 1000;
-
-class Logger {
-  private buffer: LogEntry[] = [];
-  private pendingDiskBuffer: LogEntry[] = [];
-  private flushTimer: NodeJS.Timeout | null = null;
-  private isFlushing: boolean = false;
-  private enabled: boolean;
-
-  constructor() {
-    this.enabled = process.env.AP_LOG !== 'off';
-    try {
-      if (!fs.existsSync(LOG_DIR)) {
-        fs.mkdirSync(LOG_DIR, { recursive: true });
-      }
-    } catch {}
+class UnifiedLoggerFacade {
+  private get enabled(): boolean {
+    return process.env.AP_LOG !== 'off';
   }
 
-  private write(level: LogLevel, mod: string, msg: string, data?: any) {
+  private normalizeMeta(data?: unknown): Record<string, unknown> | undefined {
+    if (data === undefined || data === null) return undefined;
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      return data as Record<string, unknown>;
+    }
+    return { value: data };
+  }
+
+  info(mod: string, msg: string, data?: unknown) {
     if (!this.enabled) return;
-    const entry: LogEntry = {
-      ts: new Date().toISOString(),
-      level,
-      mod,
-      msg,
-      data: data ?? undefined
-    };
-
-    this.buffer.push(entry);
-    if (this.buffer.length > MAX_MEMORY) {
-      this.buffer = this.buffer.slice(-MAX_MEMORY);
-    }
-
-    this.pendingDiskBuffer.push(entry);
-    if (this.pendingDiskBuffer.length > MAX_PENDING_DISK) {
-      this.pendingDiskBuffer = this.pendingDiskBuffer.slice(-MAX_PENDING_DISK);
-    }
-
-    const prefix = `[${entry.ts}] [${level.toUpperCase()}] [${mod}]`;
-    if (level === 'error') console.error(prefix, msg, data ?? '');
-    else if (level === 'warn') console.warn(prefix, msg);
-    else if (level === 'debug' && process.env.NODE_ENV !== 'production') console.log(prefix, msg, data ?? '');
-    else if (level === 'info') console.log(prefix, msg);
-
-    // كتابة مؤجلة (debounced) - مرة كل 2 ثانية كحد أقصى بدون حجب Event Loop
-    if (!this.flushTimer) {
-      this.flushTimer = setTimeout(() => {
-        this.flushTimer = null;
-        void this.flushToFileAsync();
-      }, 2000);
-      if (this.flushTimer.unref) this.flushTimer.unref();
-    }
+    appLogger.info(mod, msg, this.normalizeMeta(data));
   }
 
-  info(mod: string, msg: string, data?: any) {
-    this.write('info', mod, msg, data);
+  warn(mod: string, msg: string, data?: unknown) {
+    if (!this.enabled) return;
+    appLogger.warn(mod, msg, this.normalizeMeta(data));
   }
 
-  warn(mod: string, msg: string, data?: any) {
-    this.write('warn', mod, msg, data);
+  error(mod: string, msg: string, data?: unknown) {
+    if (!this.enabled) return;
+    appLogger.error(mod, msg, this.normalizeMeta(data));
   }
 
-  error(mod: string, msg: string, data?: any) {
-    this.write('error', mod, msg, data);
+  debug(mod: string, msg: string, data?: unknown) {
+    if (!this.enabled) return;
+    appLogger.debug(mod, msg, this.normalizeMeta(data));
   }
 
-  debug(mod: string, msg: string, data?: any) {
-    this.write('debug', mod, msg, data);
-  }
-
-  private async flushToFileAsync() {
-    if (this.isFlushing || this.pendingDiskBuffer.length === 0) return;
-    this.isFlushing = true;
-    const entries = this.pendingDiskBuffer;
-    this.pendingDiskBuffer = [];
-    try {
-      await fs.promises.mkdir(LOG_DIR, { recursive: true });
-      const logFile = path.join(LOG_DIR, 'ap-manager.log');
-      try {
-        const stat = await fs.promises.stat(logFile);
-        if (stat.size > MAX_FILE_SIZE) {
-          this.rotateLogs();
-        }
-      } catch {}
-      const lines = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-      await fs.promises.appendFile(logFile, lines, 'utf8');
-    } catch {
-      // تجاهل أخطاء الكتابة غير الحرجة مع منع تراكمها في الذاكرة
-    } finally {
-      this.isFlushing = false;
-      if (this.pendingDiskBuffer.length > 0 && !this.flushTimer) {
-        this.flushTimer = setTimeout(() => {
-          this.flushTimer = null;
-          void this.flushToFileAsync();
-        }, 2000);
-        if (this.flushTimer.unref) this.flushTimer.unref();
-      }
-    }
-  }
-
-  private flushToFileSync() {
-    if (this.pendingDiskBuffer.length === 0) return;
-    const entries = this.pendingDiskBuffer;
-    this.pendingDiskBuffer = [];
-    try {
-      if (!fs.existsSync(LOG_DIR)) {
-        fs.mkdirSync(LOG_DIR, { recursive: true });
-      }
-      const logFile = path.join(LOG_DIR, 'ap-manager.log');
-      if (fs.existsSync(logFile) && fs.statSync(logFile).size > MAX_FILE_SIZE) {
-        this.rotateLogs();
-      }
-      const line = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-      fs.appendFileSync(logFile, line, 'utf8');
-    } catch {
-      // لا نرمي خطأ إذا فشلت كتابة السجل
-    }
-  }
-
-  private rotateLogs() {
-    try {
-      for (let i = MAX_FILES - 1; i >= 1; i--) {
-        const older = path.join(LOG_DIR, `ap-manager.${i}.log`);
-        const newer = path.join(LOG_DIR, `ap-manager.${i - 1}.log`);
-        if (fs.existsSync(newer)) {
-          if (fs.existsSync(older)) fs.unlinkSync(older);
-          fs.renameSync(newer, older);
-        }
-      }
-      const main = path.join(LOG_DIR, 'ap-manager.log');
-      if (fs.existsSync(main)) {
-        const firstBackup = path.join(LOG_DIR, 'ap-manager.1.log');
-        if (fs.existsSync(firstBackup)) fs.unlinkSync(firstBackup);
-        fs.renameSync(main, firstBackup);
-      }
-    } catch {}
-  }
-
-  getRecent(count: number = 50): LogEntry[] {
-    return this.buffer.slice(-count);
+  getRecent(count = 50): LogEntry[] {
+    return appLogger.getRecent(count).map(toLegacyEntry).reverse();
   }
 
   getErrors(): LogEntry[] {
-    return this.buffer.filter((e) => e.level === 'error');
+    return appLogger
+      .getRecent(200)
+      .filter((e) => e.level === 'ERROR')
+      .map(toLegacyEntry)
+      .reverse();
   }
 
   getByVendor(v: string): LogEntry[] {
-    return this.buffer.filter((e) => e.mod.toLowerCase().includes(v.toLowerCase()));
+    const q = v.toLowerCase();
+    return appLogger
+      .getRecent(200)
+      .filter((e) => e.module.toLowerCase().includes(q))
+      .map(toLegacyEntry)
+      .reverse();
   }
 
-  /** تنظيف عند إغلاق العملية */
   shutdown() {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
-    this.flushToFileSync();
+    appLogger.shutdown();
   }
 }
 
-export const logger = new Logger();
-
-// كتابة السجلات المعلقة قبل إغلاق العملية
-process.on('SIGTERM', () => logger.shutdown());
-process.on('SIGINT', () => logger.shutdown());
+export const logger = new UnifiedLoggerFacade();

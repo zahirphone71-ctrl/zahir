@@ -113,7 +113,7 @@ export const RouterTerminalView: React.FC = () => {
         const next: TerminalEntry[] = [
           ...prev,
           {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            id: `${Date.now()}_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : prev.length}`,
             cmd: cmdToRun,
             output: res.output || (res.success ? 'تم التنفيذ بنجاح بدون مخرجات' : 'فشل تنفيذ الأمر'),
             time: new Date().toLocaleTimeString('ar-EG'),

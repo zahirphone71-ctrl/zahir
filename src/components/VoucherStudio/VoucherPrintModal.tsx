@@ -18,7 +18,8 @@ import {
   Sliders,
   Compass,
   QrCode,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle
 } from "lucide-react";
 import html2canvas from "html2canvas";
 import { 
@@ -31,10 +32,11 @@ import {
 } from "./types";
 import { VoucherCardPreview } from "./VoucherCardPreview";
 import { exportA4SheetToPdf, exportBatchVouchersToPdf } from "./pdfExporter";
-import { autoCalcGrid } from "./gridCalculator";
+import { autoCalcGrid, getPaperSpec } from "./gridCalculator";
 import { generateStandaloneVoucherHtmlAsync } from "./voucherHtmlGenerator";
 import { preGenerateQrCodes, clearQrCache } from "./qrPreGenerator";
 import { printHtmlSafely } from "../../lib/printHelper";
+import { ConfirmModal } from "../ConfirmModal";
 
 interface VoucherPrintModalProps {
   isOpen: boolean;
@@ -123,6 +125,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
   const [exportingHtml, setExportingHtml] = useState<boolean>(false);
   const [pdfProgress, setPdfProgress] = useState<number>(0);
   const [pdfStatusMessage, setPdfStatusMessage] = useState<string>("");
+  const [pendingExportAction, setPendingExportAction] = useState<'print' | 'pdf' | 'html' | null>(null);
 
   // Paper Orientation state (Portrait / Landscape)
   const [localOrientation, setLocalOrientation] = useState<'portrait' | 'landscape'>(
@@ -527,6 +530,36 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
     onPrint
   ]);
 
+  const requestExportAction = useCallback((action: 'print' | 'pdf' | 'html') => {
+    const hasCards = Boolean((allVouchers && allVouchers.length > 0) || (modalData?.vouchers && modalData.vouchers.length > 0));
+    if (!hasCards) return;
+
+    if (!isSampleVouchers && syncStats.unsynced > 0) {
+      setPendingExportAction(action);
+      return;
+    }
+
+    if (action === 'print') void handleDirectPrint();
+    else if (action === 'pdf') void handleDirectPdfExport();
+    else void handleDirectSaveHtml();
+  }, [
+    allVouchers,
+    modalData?.vouchers,
+    isSampleVouchers,
+    syncStats.unsynced,
+    handleDirectPrint,
+    handleDirectPdfExport,
+    handleDirectSaveHtml
+  ]);
+
+  const confirmPendingExportAction = useCallback(() => {
+    const action = pendingExportAction;
+    setPendingExportAction(null);
+    if (action === 'print') void handleDirectPrint();
+    else if (action === 'pdf') void handleDirectPdfExport();
+    else if (action === 'html') void handleDirectSaveHtml();
+  }, [pendingExportAction, handleDirectPrint, handleDirectPdfExport, handleDirectSaveHtml]);
+
   // Direct CSV Export with proper UTF-8 BOM
   const handleExportCSVDirect = useCallback(() => {
     const list = (allVouchers && allVouchers.length > 0)
@@ -576,9 +609,24 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
   if (!isOpen) return null;
 
   const safeTotalPages = Math.max(1, totalPages || 1);
-  const isPos = layout.cols === 1 && layout.rows === 1;
+  const paperSpec = getPaperSpec(
+    design?.paperType,
+    localOrientation,
+    undefined,
+    undefined,
+    design?.cardHeightMm || 52,
+    design?.cardMarginSide ?? gridInfo?.paddingMm ?? 4
+  );
+  const isPos = Boolean(
+    paperSpec.isPos ||
+    layout.isPos ||
+    layout.id.startsWith('pos') ||
+    (layout.cols === 1 && layout.rows === 1)
+  );
   const isUltraDense = layout.cols >= 15 || layout.rows >= 15;
   const isHighDense = layout.cols >= 8 || layout.rows >= 8;
+  const paperLabel = gridInfo?.paperLabel || paperSpec.paperLabel;
+  const orientationLabel = localOrientation === 'portrait' ? `${paperLabel} طولي` : `${paperLabel} عرضي`;
 
   const totalSlots = isPos ? (modalData?.vouchers.length || 1) : layout.cols * layout.rows;
   const vouchersOnPage = modalData?.vouchers || [];
@@ -623,7 +671,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
             </div>
             <div>
               <h2 className="font-bold text-sm sm:text-base flex items-center gap-2 flex-wrap">
-                <span>استوديو الكروت - محاكي ورقة A4 والطباعة المباشرة</span>
+                <span>استوديو الكروت - محاكي ورقة {paperLabel} والطباعة المباشرة</span>
                 {isSampleVouchers ? (
                   <span className="text-[11px] font-semibold text-amber-300 bg-amber-950/70 border border-amber-600/40 px-2 py-0.5 rounded-md flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
@@ -644,7 +692,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
                 شبكة: <span className="text-slate-200 font-bold">{networkName}</span> | 
                 تنسيق: <span className="text-indigo-400 font-bold">{layout.cols} عمود × {layout.rows} صف ({layout.cols * layout.rows} كرت/صفحة)</span> | 
                 إجمالي: <span className="text-amber-400 font-bold">{modalData?.totalCount || vouchersOnPage.length} كرت</span> | 
-                الورقة: <span className="text-cyan-400 font-bold">{localOrientation === 'portrait' ? 'A4 طولي' : 'A4 عرضي'}</span>
+                الورقة: <span className="text-cyan-400 font-bold">{orientationLabel}</span>
               </p>
             </div>
           </div>
@@ -747,6 +795,13 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
           </div>
         ) : null}
 
+        {gridInfo?.readabilityWarning && (
+          <div className="bg-amber-950/50 border-b border-amber-500/40 px-4 py-2 text-xs text-amber-200 flex items-center gap-2 shrink-0 print:hidden">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>{gridInfo.readabilityWarning}</span>
+          </div>
+        )}
+
         {/* PRIMARY ACTION BAR: ALL EXPORT & PRINT BUTTONS */}
         <div className="bg-slate-900/95 border-b border-slate-800 p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-2.5 shrink-0 print:hidden">
           {/* Main Action Buttons */}
@@ -754,7 +809,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
             {/* 1. PRINT BUTTON */}
             <button
               type="button"
-              onClick={handleDirectPrint}
+              onClick={() => requestExportAction('print')}
               className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 shadow-lg cursor-pointer border ${
                 isSampleVouchers
                   ? "bg-amber-600/90 hover:bg-amber-500 text-white border-amber-400/40 shadow-amber-600/20"
@@ -763,13 +818,13 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
               title={isSampleVouchers ? "طباعة تجريبية لاختبار مقاسات الورقة فقط" : "طباعة الصفحة المحددة فوراً"}
             >
               <Printer className="w-4 h-4 text-amber-300" />
-              <span>{isSampleVouchers ? "طباعة تجريبية للمقاسات فقط (عينة)" : "طباعة الكروت (🖨️)"}</span>
+              <span>{isSampleVouchers ? "طباعة تجريبية للمقاسات فقط (عينة)" : "طباعة الكروت"}</span>
             </button>
 
             {/* 2. SAVE AS PDF BUTTON */}
             <button
               type="button"
-              onClick={handleDirectPdfExport}
+              onClick={() => requestExportAction('pdf')}
               disabled={exportingPdf}
               className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-md shadow-rose-600/20 cursor-pointer border border-rose-400/30 disabled:opacity-50"
               title="تصدير وحفظ ملف PDF عالي الدقة"
@@ -781,7 +836,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
             {/* 3. SAVE AS STANDALONE HTML BUTTON */}
             <button
               type="button"
-              onClick={handleDirectSaveHtml}
+              onClick={() => requestExportAction('html')}
               disabled={exportingHtml}
               className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-cyan-500/30 cursor-pointer disabled:opacity-50"
               title="تصدير صفحة HTML متكاملة بنفس التصميم والمعاينة الحية"
@@ -811,7 +866,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
               onClick={handleExportPNG}
               disabled={exportingImage}
               className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-amber-500/30 cursor-pointer disabled:opacity-50"
-              title="تصدير ورقة A4 كصورة PNG عالية الدقة"
+              title={`تصدير ورقة ${paperLabel} كصورة PNG عالية الدقة`}
             >
               <ImageIcon className="w-4 h-4 text-amber-400" />
               <span>{exportingImage ? "جاري التصدير..." : "صورة PNG"}</span>
@@ -828,7 +883,7 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
               title="تبديل اتجاه الورقة بين طولي وعرضي"
             >
               <Compass className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{localOrientation === 'portrait' ? 'A4 طولي 📄' : 'A4 عرضي 📑'}</span>
+              <span>{orientationLabel}</span>
             </button>
 
             {/* QR Size Slider Toggle */}
@@ -1083,46 +1138,58 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
           {loading ? (
             <div className="flex flex-col items-center justify-center my-auto space-y-3 p-8">
               <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
-              <p className="text-xs font-bold text-slate-400">جاري معالجة صفحة الكروت وتجهيز ورقة A4...</p>
+              <p className="text-xs font-bold text-slate-400">جاري معالجة صفحة الكروت وتجهيز ورقة {paperLabel}...</p>
             </div>
           ) : filledVouchers.length > 0 ? (
             <div 
               className="flex justify-center items-start transition-transform duration-200 origin-top my-2"
               style={{ transform: `scale(${zoomScale})` }}
             >
-              {/* THE REALISTIC A4 SHEET (210mm x 297mm or 297mm x 210mm) */}
+              {/* THE REALISTIC PAPER SHEET matching gridCalculator + HTML export */}
               <div
                 ref={a4SheetRef}
                 id="a4-sheet-container"
                 className="bg-white text-slate-900 shadow-2xl rounded-xs relative flex flex-col justify-between overflow-hidden"
                 style={{
-                  width: isPos ? "80mm" : (localOrientation === "landscape" ? (design?.paperType === 'a3' ? '420mm' : design?.paperType === 'a5' ? '210mm' : design?.paperType === 'letter' ? '279.4mm' : '297mm') : (design?.paperType === 'a3' ? '297mm' : design?.paperType === 'a5' ? '148mm' : design?.paperType === 'letter' ? '215.9mm' : '210mm')),
-                  height: isPos ? "auto" : (localOrientation === "landscape" ? (design?.paperType === 'a3' ? '297mm' : design?.paperType === 'a5' ? '148mm' : design?.paperType === 'letter' ? '215.9mm' : '210mm') : (design?.paperType === 'a3' ? '420mm' : design?.paperType === 'a5' ? '210mm' : design?.paperType === 'letter' ? '279.4mm' : '297mm')),
-                  minHeight: isPos ? "140mm" : (localOrientation === "landscape" ? (design?.paperType === 'a3' ? '297mm' : design?.paperType === 'a5' ? '148mm' : design?.paperType === 'letter' ? '215.9mm' : '210mm') : (design?.paperType === 'a3' ? '420mm' : design?.paperType === 'a5' ? '210mm' : design?.paperType === 'letter' ? '279.4mm' : '297mm')),
+                  width: `${paperSpec.widthMm}mm`,
+                  height: isPos ? "auto" : `${paperSpec.heightMm}mm`,
+                  minHeight: isPos ? `${paperSpec.heightMm}mm` : `${paperSpec.heightMm}mm`,
                   padding: gridInfo ? `${design?.cardMarginTop ?? gridInfo.paddingMm}mm ${gridInfo.paddingMm}mm ${design?.cardMarginBottom ?? gridInfo.paddingMm}mm ${gridInfo.paddingMm}mm` : isPos ? "3mm" : "4mm",
                   boxSizing: "border-box",
                   boxShadow: "0 15px 45px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4)"
                 }}
               >
-                {/* Visual Paper Sheet Header Meta (Screen Only) */}
+                {/* Visual Paper Sheet Header Meta (Out-of-flow Screen Only so grid mm matches print) */}
                 {!isPos && (
-                  <div className="flex justify-between items-center text-[7pt] text-slate-400 border-b border-slate-200 pb-1 mb-1 font-mono select-none">
+                  <div
+                    className="flex justify-between items-center text-[6.5pt] text-slate-400 font-mono select-none pointer-events-none no-print"
+                    style={{ position: "absolute", top: "0.8mm", left: "4mm", right: "4mm", zIndex: 20 }}
+                  >
                     <span>
-                      {design?.showNetworkName !== false ? `شبكة: ${design?.networkName || networkName}` : "اسم الشبكة: [مخفي من الطباعة]"}
+                      {design?.showNetworkName !== false ? `شبكة: ${design?.networkName || networkName}` : "اسم الشبكة: [مخفي]"}
                     </span>
-                    <span>صفحة {modalPage} من {safeTotalPages} (شبكة {layout.cols} × {layout.rows} = {layout.cols * layout.rows} كرت/صفحة)</span>
-                    <span>{new Date().toLocaleDateString('ar-YE')}</span>
+                    <span>صفحة {modalPage} من {safeTotalPages} ({layout.cols}×{layout.rows} = {layout.cols * layout.rows}/صفحة)</span>
                   </div>
                 )}
 
-                {/* THE RIGID FIXED GRID: Zero overlap, Zero shifting */}
+                {/* THE RIGID FIXED GRID matching voucherHtmlGenerator */}
                 <div
                   className="w-full h-full flex-1"
                   style={{
                     display: "grid",
-                    gridTemplateColumns: isPos ? "1fr" : `repeat(${layout.cols}, minmax(0, 1fr))`,
-                    gridTemplateRows: isPos ? "auto" : `repeat(${layout.rows}, minmax(0, 1fr))`,
+                    gridTemplateColumns: isPos
+                      ? "1fr"
+                      : gridInfo?.actualCardWidthMm
+                      ? `repeat(${layout.cols}, ${gridInfo.actualCardWidthMm.toFixed(2)}mm)`
+                      : `repeat(${layout.cols}, minmax(0, 1fr))`,
+                    gridTemplateRows: isPos
+                      ? "auto"
+                      : gridInfo?.actualCardHeightMm
+                      ? `repeat(${layout.rows}, ${gridInfo.actualCardHeightMm.toFixed(2)}mm)`
+                      : `repeat(${layout.rows}, minmax(0, 1fr))`,
                     gap: gridInfo ? `${gridInfo.gapMm}mm` : isUltraDense ? "1px" : "1.5px",
+                    justifyContent: "center",
+                    alignContent: "start",
                     boxSizing: "border-box",
                     overflow: "hidden"
                   }}
@@ -1148,12 +1215,27 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
                         key={v.voucherId || `v-${i}`}
                         className="box-border overflow-hidden rounded-xs relative group"
                         style={{
-                          border: isUnsynced 
-                            ? "1px dashed #f43f5e" 
-                            : (showCutMarks ? "0.5px dashed #94a3b8" : "none"),
+                          border: showCutMarks ? "0.5px dashed #94a3b8" : "none",
                           boxSizing: "border-box"
                         }}
                       >
+                        {isUnsynced && !isSampleVouchers && (
+                          <span
+                            className="no-print no-export"
+                            title="غير محقون بالمايكروتك بعد"
+                            style={{
+                              position: "absolute",
+                              top: "2px",
+                              left: "2px",
+                              width: "6px",
+                              height: "6px",
+                              borderRadius: "9999px",
+                              backgroundColor: "#f43f5e",
+                              zIndex: 30,
+                              pointerEvents: "none"
+                            }}
+                          />
+                        )}
                         <VoucherCardPreview
                           code={v.voucherCode}
                           pin={showPin ? v.voucherPin : undefined}
@@ -1178,15 +1260,6 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
                     );
                   })}
                 </div>
-
-                {/* ذيل الصفحة — لا يُطبَع */}
-                {!isPos && (
-                  <div className="flex justify-between items-center text-[6pt] text-slate-300 border-t border-slate-100 pt-0.5 mt-1 font-mono select-none no-print">
-                    <span>{networkName}</span>
-                    <span>{localOrientation === 'portrait' ? 'A4 طولي' : 'A4 عرضي'}</span>
-                    <span>fontScale: {(gridInfo?.fontScale ?? 1.0).toFixed(3)}</span>
-                  </div>
-                )}
               </div>
             </div>
           ) : (
@@ -1200,9 +1273,9 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
         <div className="bg-slate-950 border-t border-slate-800 px-4 py-2 flex items-center justify-between text-[10px] text-slate-500 font-mono shrink-0 print:hidden">
           <div className="flex items-center gap-4">
             <span>
-              الوضع:{' '}
+              الورقة:{' '}
               <span className={localOrientation === 'landscape' ? 'text-indigo-400' : 'text-slate-300'}>
-                {localOrientation === 'portrait' ? 'طولي' : 'عرضي'}
+                {orientationLabel}
               </span>
             </span>
             <span>
@@ -1228,6 +1301,17 @@ export const VoucherPrintModal: React.FC<VoucherPrintModalProps> = ({
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={pendingExportAction !== null}
+        title="تنبيه: هذه الكروت غير محقونة بالمايكروتك"
+        message={`يوجد (${syncStats.unsynced}) كرت في هذه الدفعة لم يتم حقنه في راوتر المايكروتك بعد، ولن يتمكن العملاء من استخدامه قبل الحقن. هل تريد المتابعة والتصدير على أي حال؟`}
+        confirmText="نعم، متابعة التصدير"
+        cancelText="إلغاء للحقن أولاً"
+        type="warning"
+        onConfirm={confirmPendingExportAction}
+        onClose={() => setPendingExportAction(null)}
+      />
     </div>
   );
 };

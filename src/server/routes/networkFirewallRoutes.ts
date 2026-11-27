@@ -4,6 +4,8 @@ import { getDeviceNameFromCache, queueMacForLookup } from "../oui-lookup.ts";
 import { ftpService } from "../ftp-service.ts";
 import { sanitizeSafePath, validateSafeFileName } from "../security-shield.ts";
 import { recordAudit } from "../rbac.ts";
+import { appLogger } from "../rotatingLogger.ts";
+import { randomSecureHex } from "../utils/routerNormalizers.ts";
 import {
   MikrotikAPI,
   invalidateCache,
@@ -26,7 +28,7 @@ export function createNetworkFirewallRoutes(): Router {
 // ==========================================
 router.post("/api/mikrotik/queues", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const name = sanitizeInput(req.body.name);
     const target = sanitizeInput(req.body.target);
@@ -68,7 +70,7 @@ router.post("/api/mikrotik/queues", async (req: Request, res: Response) => {
 
 router.put("/api/mikrotik/queues/:id", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const rawId = sanitizeInput(req.params.id);
     const resolvedId = await resolveSimpleQueueId(client, rawId);
@@ -130,7 +132,7 @@ router.put("/api/mikrotik/queues/:id", async (req: Request, res: Response) => {
 
 router.delete("/api/mikrotik/queues/:id", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const rawId = sanitizeInput(req.params.id);
     const resolvedId = await resolveSimpleQueueId(client, rawId);
@@ -149,7 +151,7 @@ router.delete("/api/mikrotik/queues/:id", async (req: Request, res: Response) =>
 router.post("/api/mikrotik/queues/batch-delete", async (req: Request, res: Response) => {
   req.setTimeout(180000);
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -192,7 +194,7 @@ router.post("/api/mikrotik/queues/batch-delete", async (req: Request, res: Respo
 router.post("/api/mikrotik/queues/batch-toggle", async (req: Request, res: Response) => {
   req.setTimeout(180000);
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { ids, disabled } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -240,7 +242,7 @@ router.post("/api/mikrotik/queues/batch-toggle", async (req: Request, res: Respo
 
 router.post("/api/mikrotik/ip-bindings", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { macAddress, address, type, comment } = req.body;
     const params = [`=type=${sanitizeInput(type) || 'bypassed'}`];
@@ -258,7 +260,7 @@ router.post("/api/mikrotik/ip-bindings", async (req: Request, res: Response) => 
 
 router.delete("/api/mikrotik/ip-bindings/:id", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const id = sanitizeInput(req.params.id);
     await client.query('/ip/hotspot/ip-binding/remove', [`=.id=${id}`]);
@@ -273,7 +275,7 @@ router.delete("/api/mikrotik/ip-bindings/:id", async (req: Request, res: Respons
 router.post("/api/mikrotik/ip-bindings/batch-delete", async (req: Request, res: Response) => {
   req.setTimeout(180000);
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -288,7 +290,12 @@ router.post("/api/mikrotik/ip-bindings/batch-delete", async (req: Request, res: 
         try {
           await client.query('/ip/hotspot/ip-binding/remove', [`=.id=${id}`], { rapid: true });
           successCount++;
-        } catch {}
+        } catch (rmErr: unknown) {
+          appLogger.warn('networkFirewall', 'Batch delete IP binding item failed', {
+            id,
+            error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+          });
+        }
       }
       if (i + 30 < sanitizedIds.length) {
         await new Promise((resolve) => setTimeout(resolve, 2));
@@ -303,7 +310,7 @@ router.post("/api/mikrotik/ip-bindings/batch-delete", async (req: Request, res: 
 
 router.post("/api/mikrotik/dhcp/leases", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { address, macAddress, hostName, comment } = req.body;
     if (!address || !macAddress) {
@@ -326,7 +333,7 @@ router.post("/api/mikrotik/dhcp/leases", async (req: Request, res: Response) => 
 
 router.delete("/api/mikrotik/dhcp/leases/:id", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const id = sanitizeInput(req.params.id);
     await client.query('/ip/dhcp-server/lease/remove', [`=.id=${id}`]);
@@ -341,7 +348,7 @@ router.delete("/api/mikrotik/dhcp/leases/:id", async (req: Request, res: Respons
 router.post("/api/mikrotik/dhcp/leases/batch-delete", async (req: Request, res: Response) => {
   req.setTimeout(180000);
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -356,7 +363,12 @@ router.post("/api/mikrotik/dhcp/leases/batch-delete", async (req: Request, res: 
         try {
           await client.query('/ip/dhcp-server/lease/remove', [`=.id=${id}`], { rapid: true });
           successCount++;
-        } catch {}
+        } catch (rmErr: unknown) {
+          appLogger.warn('networkFirewall', 'Batch delete DHCP lease item failed', {
+            id,
+            error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+          });
+        }
       }
       if (i + 30 < sanitizedIds.length) {
         await new Promise((resolve) => setTimeout(resolve, 2));
@@ -372,7 +384,7 @@ router.post("/api/mikrotik/dhcp/leases/batch-delete", async (req: Request, res: 
 // Convert Dynamic DHCP Leases to Static natively via /ip/dhcp-server/lease/make-static
 router.post("/api/mikrotik/dhcp/leases/make-static", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالسيرفر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : req.body?.id ? [req.body.id] : [];
     const sanitizedIds = rawIds.map((id: any) => sanitizeInput(String(id))).filter(Boolean);
@@ -413,7 +425,7 @@ router.post("/api/mikrotik/dhcp/leases/make-static", async (req: Request, res: R
 // ═══════════════════════════════════════════════════════════════════════════
 router.get("/api/mikrotik/schedulers", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const raw = await client.querySafe('/system/scheduler/print');
     const schedulers = (Array.isArray(raw) ? raw : []).map((s: any) => ({
@@ -438,7 +450,7 @@ router.get("/api/mikrotik/schedulers", async (req: Request, res: Response) => {
 
 router.post("/api/mikrotik/schedulers", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const { name, startTime, startDate, interval, onEvent, disabled, comment, policy } = req.body;
     if (!name || !onEvent) {
@@ -467,7 +479,7 @@ router.post("/api/mikrotik/schedulers", async (req: Request, res: Response) => {
 
 router.put("/api/mikrotik/schedulers/:id", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const rawId = sanitizeInput(req.params.id);
     const { name, startTime, startDate, interval, onEvent, disabled, comment, policy } = req.body;
@@ -491,7 +503,7 @@ router.put("/api/mikrotik/schedulers/:id", async (req: Request, res: Response) =
 
 router.delete("/api/mikrotik/schedulers/:id", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const id = sanitizeInput(req.params.id);
     await client.query('/system/scheduler/remove', [`=.id=${id}`]);
@@ -505,7 +517,7 @@ router.delete("/api/mikrotik/schedulers/:id", async (req: Request, res: Response
 
 router.post("/api/mikrotik/schedulers/:id/run", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
-  if (!client.isConnected()) return res.status(401).json({ success: false, message: "غير متصل بالراوتر" });
+  if (!client.isConnected()) return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   try {
     const id = sanitizeInput(req.params.id);
     const schedList = await client.querySafe('/system/scheduler/print');
@@ -524,7 +536,7 @@ router.post("/api/mikrotik/schedulers/:id/run", async (req: Request, res: Respon
     }
     const cleanScript = onEvent.trim();
     // Execute arbitrary RouterOS script reliably via temporary /system/script
-    const tempScriptName = `zctrl_run_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const tempScriptName = `zctrl_run_${Date.now()}_${randomSecureHex(3)}`;
     const addRes: any = await client.query('/system/script/add', [
       `=name=${tempScriptName}`,
       `=source=${cleanScript}`,
@@ -538,7 +550,12 @@ router.post("/api/mikrotik/schedulers/:id/run", async (req: Request, res: Respon
         const list = await client.querySafe('/system/script/print').catch(() => []);
         const found = (Array.isArray(list) ? list : []).find((s: any) => s.name === tempScriptName);
         if (found?.['.id']) {
-          await client.querySafe('/system/script/remove', [`=.id=${found['.id']}`]).catch(() => {});
+          await client.querySafe('/system/script/remove', [`=.id=${found['.id']}`]).catch((rmErr: unknown) => {
+            appLogger.warn('networkFirewall', 'Failed to remove temporary scheduler script', {
+              tempScriptName,
+              error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+            });
+          });
         }
       });
     }
@@ -612,9 +629,10 @@ router.post("/api/mikrotik/wireless/update", async (req: Request, res: Response)
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. يمنع تعديل إعدادات الوايرلس بدون اتصال حقيقي بالراوتر."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -659,9 +677,10 @@ router.post("/api/mikrotik/wireless/toggle", async (req: Request, res: Response)
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. يمنع تغيير حالة الواجهة دون اتصال حقيقي."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -695,9 +714,10 @@ router.post("/api/mikrotik/wireless/add-vap", async (req: Request, res: Response
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. يمنع إنشاء شبكات افتراضية دون اتصال حقيقي."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -741,9 +761,10 @@ router.post("/api/mikrotik/wireless/scan", async (req: Request, res: Response) =
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. يمنع نظام ZCtrl العمليات الوهمية نهائياً؛ يرجى الاتصال بجهاز راوتر حقيقي لإجراء مسح الترددات الحقيقي."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -1010,9 +1031,10 @@ router.post("/api/mikrotik/wireless/apply-channel", async (req: Request, res: Re
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. يمنع تعديل إعدادات التردد دون اتصال حقيقي بالراوتر."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -1028,7 +1050,12 @@ router.post("/api/mikrotik/wireless/apply-channel", async (req: Request, res: Re
       if (Array.isArray(ifaces) && ifaces.length > 0 && ifaces[0]?.['.id']) {
         resolvedId = ifaces[0]['.id'];
       }
-    } catch {}
+    } catch (lookupErr: unknown) {
+      appLogger.warn('networkFirewall', 'Wireless interface ID lookup failed, using name fallback', {
+        iface,
+        error: lookupErr instanceof Error ? lookupErr.message : String(lookupErr)
+      });
+    }
 
     const idParams = [
       `=.id=${resolvedId}`,
@@ -1229,7 +1256,11 @@ async function resolveLanInterface(client: any, requested?: string): Promise<str
         if (Array.isArray(lists) && lists.some((l: any) => l.name?.toUpperCase() === 'LAN')) {
           return 'LAN';
         }
-      } catch {}
+      } catch (listErr: unknown) {
+        appLogger.warn('networkFirewall', 'Interface list lookup failed during LAN resolution', {
+          error: listErr instanceof Error ? listErr.message : String(listErr)
+        });
+      }
 
       // Fallback to first non-WAN interface
       const nonWan = ifaces.find((i: any) => !i.name?.toLowerCase().includes('wan') && !i.name?.toLowerCase().includes('ether1'));
@@ -1237,7 +1268,11 @@ async function resolveLanInterface(client: any, requested?: string): Promise<str
 
       return ifaces[0].name || 'LAN';
     }
-  } catch {}
+  } catch (ifaceErr: unknown) {
+    appLogger.warn('networkFirewall', 'Failed resolving LAN interface, defaulting to LAN', {
+      error: ifaceErr instanceof Error ? ifaceErr.message : String(ifaceErr)
+    });
+  }
   return 'LAN';
 }
 
@@ -1246,9 +1281,10 @@ router.get("/api/mikrotik/network/anti-sharing/status", async (req: Request, res
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل"
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -1292,7 +1328,11 @@ router.get("/api/mikrotik/network/anti-sharing/status", async (req: Request, res
           umTotal = ros6Um.length;
           umUnprotected = ros6Um.filter((p: any) => Number(p['shared-users']) > 1).length;
         }
-      } catch {}
+      } catch (v6Err: unknown) {
+        appLogger.warn('networkFirewall', 'User Manager profile check unavailable', {
+          error: v6Err instanceof Error ? v6Err.message : String(v6Err)
+        });
+      }
     }
 
     // Mangle TTL=1 rule
@@ -1382,9 +1422,10 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. يمنع تطبيق إجراءات الحماية بدون اتصال نشط بالراوتر."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -1431,7 +1472,12 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
                 `=shared-users=1`
               ]);
               hpCount++;
-            } catch {}
+            } catch (setErr: unknown) {
+              appLogger.warn('networkFirewall', 'Failed setting shared-users=1 on Hotspot profile', {
+                profId,
+                error: setErr instanceof Error ? setErr.message : String(setErr)
+              });
+            }
           }
         }
       }
@@ -1454,7 +1500,12 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
                 `=only-one=yes`
               ]);
               ppCount++;
-            } catch {}
+            } catch (setErr: unknown) {
+              appLogger.warn('networkFirewall', 'Failed setting only-one=yes on PPP profile', {
+                profId,
+                error: setErr instanceof Error ? setErr.message : String(setErr)
+              });
+            }
           }
         }
       }
@@ -1477,12 +1528,21 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
                 `=shared-users=1`
               ]);
               umCount++;
-            } catch {}
+            } catch (setErr: unknown) {
+              appLogger.warn('networkFirewall', 'Failed setting shared-users=1 on UM v7 profile', {
+                profId,
+                error: setErr instanceof Error ? setErr.message : String(setErr)
+              });
+            }
           }
         }
         pushLog(`ZCTRL: تم تحديث بروفايلات User Manager v7 = ${umCount} بروفايل`);
       }
-    } catch {}
+    } catch (v7Err: unknown) {
+      appLogger.warn('networkFirewall', 'UM v7 profile print unavailable during anti-sharing', {
+        error: v7Err instanceof Error ? v7Err.message : String(v7Err)
+      });
+    }
 
     if (umCount === 0) {
       try {
@@ -1497,12 +1557,21 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
                   `=shared-users=1`
                 ]);
                 umCount++;
-              } catch {}
+              } catch (setErr: unknown) {
+                appLogger.warn('networkFirewall', 'Failed setting shared-users=1 on UM v6 profile', {
+                  profId,
+                  error: setErr instanceof Error ? setErr.message : String(setErr)
+                });
+              }
             }
           }
           pushLog(`ZCTRL: تم تحديث بروفايلات User Manager v6 = ${umCount} بروفايل`);
         }
-      } catch {}
+      } catch (v6Err: unknown) {
+        appLogger.warn('networkFirewall', 'UM v6 profile print unavailable during anti-sharing', {
+          error: v6Err instanceof Error ? v6Err.message : String(v6Err)
+        });
+      }
     }
 
     // ----------------------------------------------------
@@ -1517,7 +1586,11 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
           if (c.includes('zctrl anti-tethering') || c.includes('force ttl=1')) {
             try {
               await client.query('/ip/firewall/mangle/remove', [`=.id=${m['.id'] || m.id}`]);
-            } catch {}
+            } catch (rmErr: unknown) {
+              appLogger.warn('networkFirewall', 'Failed removing old anti-tethering mangle rule', {
+                error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+              });
+            }
           }
         }
       }
@@ -1559,7 +1632,11 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
           if (c.includes('zctrl anti-proxy')) {
             try {
               await client.query('/ip/firewall/filter/remove', [`=.id=${f['.id'] || f.id}`]);
-            } catch {}
+            } catch (rmErr: unknown) {
+              appLogger.warn('networkFirewall', 'Failed removing old anti-proxy filter rule', {
+                error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+              });
+            }
           }
         }
       }
@@ -1596,7 +1673,11 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
         for (const s of existingScripts) {
           try {
             await client.query('/system/script/remove', [`=.id=${s['.id'] || s.id}`]);
-          } catch {}
+          } catch (rmErr: unknown) {
+            appLogger.warn('networkFirewall', 'Failed removing old zctrl-anti-sharing-v4 script', {
+              error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+            });
+          }
         }
       }
 
@@ -1634,7 +1715,11 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
           return val === 'no' || val === 'false';
         }).length;
       }
-    } catch {}
+    } catch (verErr: unknown) {
+      appLogger.warn('networkFirewall', 'Anti-sharing verification check failed', {
+        error: verErr instanceof Error ? verErr.message : String(verErr)
+      });
+    }
 
     const isVerified = leftoverHp === 0 && leftoverPp === 0;
     if (isVerified) {
@@ -1648,7 +1733,11 @@ router.post("/api/mikrotik/network/anti-sharing", async (req: Request, res: Resp
       await client.querySafe('/log/info', [
         `=message=ZCTRL: Anti-Sharing v4.0 applied successfully (HS:${hpCount}, PPP:${ppCount}, UM:${umCount}, LAN:${targetLan})`
       ]);
-    } catch {}
+    } catch (logErr: unknown) {
+      appLogger.warn('networkFirewall', 'Failed writing anti-sharing confirmation to RouterOS log', {
+        error: logErr instanceof Error ? logErr.message : String(logErr)
+      });
+    }
 
     // Invalidate caches
     invalidateCache('/ip/hotspot/user/profile');
@@ -1688,7 +1777,7 @@ router.post("/api/mikrotik/network/anti-sharing/revert", async (req: Request, re
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل" });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
 
     let removedMangles = 0;
@@ -1703,7 +1792,11 @@ router.post("/api/mikrotik/network/anti-sharing/revert", async (req: Request, re
           try {
             await client.query('/ip/firewall/mangle/remove', [`=.id=${m['.id'] || m.id}`]);
             removedMangles++;
-          } catch {}
+          } catch (rmErr: unknown) {
+            appLogger.warn('networkFirewall', 'Failed removing mangle rule during anti-sharing revert', {
+              error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+            });
+          }
         }
       }
     }
@@ -1717,7 +1810,11 @@ router.post("/api/mikrotik/network/anti-sharing/revert", async (req: Request, re
           try {
             await client.query('/ip/firewall/filter/remove', [`=.id=${f['.id'] || f.id}`]);
             removedFilters++;
-          } catch {}
+          } catch (rmErr: unknown) {
+            appLogger.warn('networkFirewall', 'Failed removing filter rule during anti-sharing revert', {
+              error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+            });
+          }
         }
       }
     }
@@ -1743,9 +1840,10 @@ router.post("/api/mikrotik/network/ping", async (req: Request, res: Response) =>
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. لا يمكن إجراء فحص Ping بدون اتصال حقيقي بالراوتر."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -2313,7 +2411,7 @@ router.post("/api/mikrotik/network/access-points/set-comment", async (req: Reque
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل. يمنع تعديل بيانات نقطة الوصول بدون اتصال حقيقي." });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
 
     const { macAddress, ipAddress, iface, comment } = req.body;
@@ -2356,7 +2454,7 @@ router.post("/api/mikrotik/wireless/antennas/kick", async (req: Request, res: Re
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل. يمنع فصل الأجهزة بدون اتصال حقيقي." });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
 
     const { id, macAddress } = req.body;
@@ -2451,7 +2549,7 @@ router.post("/api/mikrotik/hotspot/server-profiles/update", async (req: Request,
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل. يمنع تعديل إعدادات البروفايل بدون اتصال حقيقي." });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
 
     const {
@@ -2512,7 +2610,7 @@ router.post("/api/mikrotik/hotspot/server-profiles/create", async (req: Request,
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل. يمنع إنشاء بروفايل بدون اتصال حقيقي." });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
 
     const {
@@ -2561,7 +2659,7 @@ router.post("/api/mikrotik/hotspot/login-page/apply-template", async (req: Reque
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل. يمنع تعديل مجلد الصفحة بدون اتصال حقيقي." });
+      return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
     }
 
     const { profileId, profileName, folderName, dnsName } = req.body;
@@ -2594,9 +2692,10 @@ router.post("/api/mikrotik/hotspot/login-page/deploy", async (req: Request, res:
   const client = req.routerClient || MikrotikAPI;
   try {
     if (!client.isConnected()) {
-      return res.status(401).json({
+      return res.status(503).json({
         success: false,
-        message: "راوتر المايكروتك غير متصل. لا يمكن رفع وتثبيت صفحة الهوتسبوت بدون اتصال حقيقي بالراوتر."
+        reconnecting: true,
+        message: "جاري إعادة الاتصال بالراوتر"
       });
     }
 
@@ -2635,7 +2734,12 @@ router.post("/api/mikrotik/hotspot/login-page/deploy", async (req: Request, res:
         // Ensure file exists by printing to file
         try {
           await client.querySafe('/file/print', [`=file=${fullFilePath}`]);
-        } catch {}
+        } catch (printErr: unknown) {
+          appLogger.warn('networkFirewall', 'Pre-creating hotspot portal file slot failed', {
+            fullFilePath,
+            error: printErr instanceof Error ? printErr.message : String(printErr)
+          });
+        }
         
         // Write content
         await client.querySafe('/file/set', [
@@ -2663,7 +2767,12 @@ router.post("/api/mikrotik/hotspot/login-page/deploy", async (req: Request, res:
       // Fallback: write truncated direct if FTP fails (no scripts)
       try {
          await client.querySafe('/file/print', [`=file=${fullFilePath}`]);
-      } catch {}
+      } catch (printErr: unknown) {
+        appLogger.warn('networkFirewall', 'Fallback hotspot portal file pre-creation failed', {
+          fullFilePath,
+          error: printErr instanceof Error ? printErr.message : String(printErr)
+        });
+      }
       await client.querySafe('/file/set', [
         `=numbers=${fullFilePath}`,
         `=contents=${content.substring(0, 4000)}`
@@ -2730,7 +2839,7 @@ router.post("/api/mikrotik/hotspot/login-page/get-config", async (req: Request, 
 router.post("/api/mikrotik/firewall/quick-harden", async (req: Request, res: Response) => {
   const client = req.routerClient || MikrotikAPI;
   if (!client.isConnected()) {
-    return res.status(401).json({ success: false, message: "راوتر المايكروتك غير متصل" });
+    return res.status(503).json({ success: false, reconnecting: true, message: "جاري إعادة الاتصال بالراوتر" });
   }
 
   try {

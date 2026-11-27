@@ -3,7 +3,7 @@
 //  Provides:
 //   1. Multi-Tenant Session Isolation (Strict Token Enforcement)
 //   2. Rate Limiting on Auth/Connection (Brute-force protection)
-//   3. Controlled Dynamic CORS Whitelist
+//   3. Controlled Dynamic CORS Whitelist (Production Strict)
 //   4. Deep Path Traversal Sanitization (Anti-Traversal Guard)
 //   5. RouterOS Script & Command Injection Sanitizer
 //   6. In-Memory & At-Rest AES-256-GCM Credential Vault
@@ -13,12 +13,14 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import type { Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 // -------------------------------------------------------------------
 // 1. AES-256-GCM Cryptographic Vault
 // -------------------------------------------------------------------
-function getOrGenerateMasterKey(): Buffer {
+const EPHEMERAL_FALLBACK_KEY = crypto.randomBytes(32);
+
+export function getOrGenerateMasterKey(): Buffer {
   if (process.env.APP_ENCRYPTION_KEY && process.env.APP_ENCRYPTION_KEY.trim()) {
     return crypto.createHash('sha256').update(process.env.APP_ENCRYPTION_KEY.trim()).digest();
   }
@@ -39,33 +41,120 @@ function getOrGenerateMasterKey(): Buffer {
         return crypto.createHash('sha256').update(storedKey).digest();
       }
     }
-    // Generate new cryptographically secure 256-bit random key
     const newKey = crypto.randomBytes(32).toString('hex');
-    fs.writeFileSync(keyFile, newKey, { mode: 0o600 });
+    const tmpFile = `${keyFile}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpFile, newKey, { mode: 0o600, encoding: 'utf8' });
+    fs.renameSync(tmpFile, keyFile);
     return crypto.createHash('sha256').update(newKey).digest();
   } catch {
-    // Ephemeral per-process 256-bit random fallback if filesystem is read-only (never use a hardcoded secret)
     console.warn('[SecurityVault] Data directory is not writable; using ephemeral per-process encryption key.');
-    return crypto.randomBytes(32);
+    return EPHEMERAL_FALLBACK_KEY;
   }
 }
 
-const MASTER_KEY = getOrGenerateMasterKey();
+const INITIAL_MASTER_KEY = getOrGenerateMasterKey();
 
-/**
- * Extracts router session token strictly from request headers (never from URL query strings)
- */
-export function resolveRequestToken(req: Request): string | undefined {
+function getActiveMasterKey(): Buffer {
+  if (process.env.APP_ENCRYPTION_KEY && process.env.APP_ENCRYPTION_KEY.trim()) {
+    return crypto.createHash('sha256').update(process.env.APP_ENCRYPTION_KEY.trim()).digest();
+  }
+  return INITIAL_MASTER_KEY;
+}
+
+export const SESSION_COOKIE_NAME = 'zctrl_rt';
+
+export function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!cookieHeader || typeof cookieHeader !== 'string') return result;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const rawVal = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      result[key] = decodeURIComponent(rawVal);
+    } catch {
+      result[key] = rawVal;
+    }
+  }
+  return result;
+}
+
+export function isHttpsRequest(req: Request): boolean {
+  if (req.secure) return true;
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return proto === 'https';
+}
+
+export function setSessionCookie(req: Request, res: Response, token: string): void {
+  if (!token) return;
+  const isHttps = isHttpsRequest(req);
+  const attrs = isHttps
+    ? `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned`
+    : `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`;
+  res.append('Set-Cookie', attrs);
+}
+
+export function clearSessionCookie(req: Request, res: Response): void {
+  const isHttps = isHttpsRequest(req);
+  const attrs = isHttps
+    ? `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=None; Partitioned`
+    : `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax`;
+  res.append('Set-Cookie', attrs);
+}
+
+export function resolveRequestTokenWithSource(req: Request): {
+  token?: string;
+  source?: 'header' | 'cookie';
+} {
   const headerToken = req.headers['x-router-token'];
   if (typeof headerToken === 'string' && headerToken.trim()) {
-    return headerToken.trim();
+    return { token: headerToken.trim(), source: 'header' };
   }
   const authHeader = req.headers['authorization'];
   if (typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
     const bearer = authHeader.slice(7).trim();
-    if (bearer) return bearer;
+    if (bearer) return { token: bearer, source: 'header' };
   }
-  return undefined;
+  const cookies = parseCookies(typeof req.headers.cookie === 'string' ? req.headers.cookie : undefined);
+  const cookieToken = cookies[SESSION_COOKIE_NAME];
+  if (cookieToken && cookieToken.trim()) {
+    return { token: cookieToken.trim(), source: 'cookie' };
+  }
+  return {};
+}
+
+/**
+ * Extracts router session token strictly from request headers or HttpOnly browser-session cookie
+ * (never from URL query strings).
+ */
+export function resolveRequestToken(req: Request): string | undefined {
+  return resolveRequestTokenWithSource(req).token;
+}
+
+/**
+ * Verifies CSRF protection when an unsafe HTTP mutation relies on the HttpOnly session cookie.
+ */
+export function verifyCookieCsrf(req: Request): boolean {
+  const xrw = String(req.headers['x-requested-with'] || '').trim().toLowerCase();
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+
+  if (origin) {
+    if (origin === 'null') return false;
+    try {
+      const parsed = new URL(origin);
+      if (host && parsed.host.toLowerCase() === host) {
+        return true;
+      }
+      return isAllowedOrigin(origin);
+    } catch {
+      return false;
+    }
+  }
+
+  return xrw === 'xmlhttprequest' || xrw === 'zctrl';
 }
 
 export interface EncryptedSecretPayload {
@@ -80,34 +169,36 @@ export interface EncryptedSecretPayload {
 export function encryptSecret(plainText: string): string {
   if (!plainText) return '';
   const iv = crypto.randomBytes(12); // 96-bit IV recommended for GCM
-  const cipher = crypto.createCipheriv('aes-256-gcm', MASTER_KEY, iv);
-  
+  const cipher = crypto.createCipheriv('aes-256-gcm', getActiveMasterKey(), iv);
+
   let encrypted = cipher.update(plainText, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag().toString('hex');
-  
+
   // Format: iv:authTag:encrypted
   return `${iv.toString('hex')}:${authTag}:${encrypted}`;
 }
 
 /**
- * Decrypt AES-256-GCM ciphertext
+ * Decrypt AES-256-GCM ciphertext strictly (never returns unencrypted plaintext payloads)
  */
 export function decryptSecret(cipherString: string): string | null {
   if (!cipherString) return '';
   try {
     const parts = cipherString.split(':');
     if (parts.length !== 3) {
-      // Fallback if plaintext or legacy format
-      return cipherString;
+      return null;
     }
     const [ivHex, tagHex, dataHex] = parts;
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(tagHex, 'hex');
-    
-    const decipher = crypto.createDecipheriv('aes-256-gcm', MASTER_KEY, iv);
+    if (iv.length !== 12 || authTag.length !== 16 || !dataHex) {
+      return null;
+    }
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', getActiveMasterKey(), iv);
     decipher.setAuthTag(authTag);
-    
+
     let decrypted = decipher.update(dataHex, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
@@ -135,7 +226,7 @@ export const securityConfig: SecurityConfig = {
   strictCorsEnabled: true,
   pathTraversalGuardEnabled: true,
   scriptInjectionGuardEnabled: true,
-  inMemoryEncryptionEnabled: true,
+  inMemoryEncryptionEnabled: true
 };
 
 // -------------------------------------------------------------------
@@ -143,13 +234,15 @@ export const securityConfig: SecurityConfig = {
 // -------------------------------------------------------------------
 export const authRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes window
-  max: 120, // generous allowance for rapid testing and reconnects
+  max: 10,
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req: Request) => {
+  keyGenerator: (req: Request) =>
+    `${ipKeyGenerator(req.ip ?? '')}:${String(req.body?.operatorUsername || req.body?.username || '').toLowerCase()}`,
+  skip: (_req: Request) => {
     if (!securityConfig.rateLimitingEnabled) return true;
-    const ip = req.ip || req.socket.remoteAddress || '';
-    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    return process.env.NODE_ENV === 'test' || process.env.ZCTRL_DISABLE_RATE_LIMIT === 'true';
   },
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
@@ -162,10 +255,10 @@ export const authRateLimiter = rateLimit({
 
 export const diagnosticRateLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute window
-  max: 40, // 40 diagnostic / discovery requests per minute
+  max: 40,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => !securityConfig.rateLimitingEnabled,
+  skip: () => !securityConfig.rateLimitingEnabled || process.env.NODE_ENV === 'test',
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
       success: false,
@@ -177,10 +270,10 @@ export const diagnosticRateLimiter = rateLimit({
 
 export const apiGeneralRateLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 1000, // 1000 requests per minute per IP for high-speed dashboard telemetry
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => !securityConfig.rateLimitingEnabled,
+  skip: () => !securityConfig.rateLimitingEnabled || process.env.NODE_ENV === 'test',
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
       success: false,
@@ -193,33 +286,65 @@ export const apiGeneralRateLimiter = rateLimit({
 // -------------------------------------------------------------------
 // 4. Controlled Dynamic CORS Whitelist Validator
 // -------------------------------------------------------------------
-const allowedEnvOrigins = (process.env.ALLOWED_ORIGINS || '')
-  .split(',')
-  .map(o => o.trim())
-  .filter(Boolean);
+function getAllowedEnvOrigins(): string[] {
+  return (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+}
 
 export function isAllowedOrigin(origin: string | undefined): boolean {
-  if (!origin || origin === 'null') return true; // allow same-origin, curl, server-to-server, Electron file:// ("null" origin)
-  
+  // Requests without an Origin header (curl, same-origin server-to-server) are allowed;
+  // authentication is still enforced via bearer token.
+  if (!origin) return true;
+  if (origin === 'null') return false;
+
   if (!securityConfig.strictCorsEnabled) return true;
 
-  if (
-    origin.startsWith('file://') ||
-    origin.startsWith('capacitor://') ||
-    origin.startsWith('ionic://') ||
-    origin.startsWith('app://')
-  ) {
-    return true;
-  }
+  const isProd = process.env.NODE_ENV === 'production';
+  const port = String(process.env.PORT || '3000');
+  const allowedEnvOrigins = getAllowedEnvOrigins();
 
   try {
     const url = new URL(origin);
     const host = url.hostname;
+    const normalizedOrigin = url.origin;
 
-    // 1. Localhost and Loopbacks
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') return true;
+    // Explicit ALLOWED_ORIGINS always permitted when configured
+    if (allowedEnvOrigins.includes(normalizedOrigin) || allowedEnvOrigins.includes(origin) || allowedEnvOrigins.includes(host)) {
+      return true;
+    }
 
-    // 2. Private LAN RFC1918 (192.168.x.x, 10.x.x.x, 172.16-31.x.x, 169.254.x.x)
+    // Exact APP_URL origin if configured
+    if (process.env.APP_URL && process.env.APP_URL.trim()) {
+      try {
+        const appOrigin = new URL(process.env.APP_URL.trim()).origin;
+        if (normalizedOrigin === appOrigin) return true;
+      } catch (err) {
+        console.warn('[SecurityShield] Invalid APP_URL format:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    if (isProd) {
+      // Production: strictly allow only the application's own loopback origin (+ ALLOWED_ORIGINS above)
+      const ownOrigins = new Set([
+        `http://127.0.0.1:${port}`,
+        `https://127.0.0.1:${port}`,
+        `http://localhost:${port}`,
+        `https://localhost:${port}`
+      ]);
+      if (process.env.HOST && process.env.HOST !== '0.0.0.0') {
+        ownOrigins.add(`http://${process.env.HOST}:${port}`);
+        ownOrigins.add(`https://${process.env.HOST}:${port}`);
+      }
+      return ownOrigins.has(normalizedOrigin);
+    }
+
+    // Non-production (dev / preview): allow loopback, LAN RFC1918, and AI Studio preview subdomains
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') {
+      return true;
+    }
+
     if (
       /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
       /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
@@ -229,21 +354,12 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
       return true;
     }
 
-    // 3. AI Studio / Cloud Run Preview & Dev subdomains
     if (
       host.endsWith('.run.app') ||
       host.endsWith('.google.internal') ||
       host.endsWith('.aistudio.google') ||
-      host.endsWith('.google.com') ||
-      host.endsWith('.googleusercontent.com') ||
-      host.endsWith('.web.app') ||
-      host.endsWith('.firebaseapp.com')
+      host.endsWith('.googleusercontent.com')
     ) {
-      return true;
-    }
-
-    // 4. Custom Environment Allowed Origins
-    if (allowedEnvOrigins.includes(origin) || allowedEnvOrigins.includes(host)) {
       return true;
     }
 
@@ -297,7 +413,6 @@ export function sanitizeSafePath(rawPath: string, allowedFolder = 'hotspot'): {
     return { safePath: '', isSafe: false, error: 'مسار الملف غير محدد' };
   }
 
-  // 1. Recursive URL decode to catch %252e%252e double-encoding
   let decoded = rawPath;
   for (let i = 0; i < 3; i++) {
     try {
@@ -309,10 +424,8 @@ export function sanitizeSafePath(rawPath: string, allowedFolder = 'hotspot'): {
     }
   }
 
-  // 2. Strip null bytes, control characters, and leading/trailing whitespace
   decoded = decoded.replace(/[\x00-\x1F\x7F]/g, '').trim();
 
-  // 3. Check for forbidden segments
   const lower = decoded.toLowerCase();
   for (const dangerous of DANGEROUS_PATH_SEGMENTS) {
     if (lower.includes(dangerous)) {
@@ -324,14 +437,10 @@ export function sanitizeSafePath(rawPath: string, allowedFolder = 'hotspot'): {
     }
   }
 
-  // 4. Normalize path using POSIX rules
   const normalized = path.posix.normalize(decoded).replace(/^\/+/, '');
-
-  // 5. If an allowed root folder is enforced, ensure the path starts with it or stays inside it
   const cleanAllowed = path.posix.normalize(allowedFolder).replace(/^\/+/, '').replace(/\/+$/, '');
-  
+
   if (cleanAllowed && !normalized.startsWith(cleanAllowed)) {
-    // If the path doesn't start with allowed root, safely prepend it
     const combined = path.posix.join(cleanAllowed, normalized);
     return { safePath: combined, isSafe: true };
   }
@@ -345,31 +454,23 @@ export function sanitizeSafePath(rawPath: string, allowedFolder = 'hotspot'): {
 export function validateSafeFileName(fileName: string): boolean {
   if (!fileName || typeof fileName !== 'string') return false;
   if (fileName.length > 128) return false;
-  // Strictly alphanumeric, dots, dashes, underscores
   return /^[a-zA-Z0-9._-]+$/.test(fileName);
 }
 
 // -------------------------------------------------------------------
 // 6. RouterOS Script & Command Injection Shield
 // -------------------------------------------------------------------
-/**
- * Sanitizes parameters before passing into RouterOS CLI / scripts
- */
 export function sanitizeRouterOsParam(val: any): string {
   if (val === null || val === undefined) return '';
   const str = typeof val === 'string' ? val : String(val);
-  
-  // Remove null bytes, control chars, dollar-bracket command substitutions, and backticks
+
   return str
     .replace(/[\x00-\x1F\x7F]/g, '')
-    .replace(/\$\[/g, '') // prevent script expression evaluation $[...]
-    .replace(/`/g, '')    // prevent backtick evaluation
+    .replace(/\$\[/g, '')
+    .replace(/`/g, '')
     .trim();
 }
 
-/**
- * Generates safe RouterOS script variable definitions without quote escaping risks
- */
 export function buildSafeScriptVar(varName: string, value: string): string {
   const cleanVar = varName.replace(/[^a-zA-Z0-9_]/g, '');
   const cleanVal = value

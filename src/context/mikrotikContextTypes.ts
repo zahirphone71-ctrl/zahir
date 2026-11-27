@@ -95,6 +95,8 @@ export interface PingStabilizerSnapshot {
     fastLanePackets: number;
     fastLaneBytes: number;
     prioritizeManagementApi: boolean;
+    interfaceList?: string;
+    maxLimit?: string;
     checkedAt: number | null;
   };
   recentActions: Array<{
@@ -114,6 +116,148 @@ export interface PingStabilizerSnapshot {
   updatedAt: number;
 }
 
+export interface QosRulePreview {
+  id: string;
+  table: 'mangle' | 'queue_tree';
+  chain: string;
+  action: string;
+  target: string;
+  description: string;
+  command: string;
+  params: string[];
+}
+
+export interface DesktopSessionBridge {
+  isDesktop: boolean;
+  setActiveSession: (payload: {
+    host: string;
+    port?: number;
+    username: string;
+    password?: string;
+    useTls?: boolean;
+    timeoutMs?: number;
+    tlsFingerprint?: string;
+    acceptTlsFingerprint?: boolean;
+  }) => Promise<{ success: boolean }>;
+  clearActiveSession: () => Promise<{ success: boolean }>;
+  restoreBackendSession: () => Promise<{
+    success: boolean;
+    token?: string;
+    router?: RouterConnection;
+    role?: OperatorRole;
+    operatorName?: string;
+    tlsFingerprint?: string | null;
+    message?: string;
+  }>;
+  onBackendRespawned: (callback: () => void) => () => void;
+  retryBackend?: () => Promise<{ success: boolean; message?: string }>;
+  onBackendFailed?: (
+    callback: (payload: {
+      attempts: number;
+      code?: number | null;
+      signal?: string | null;
+      message?: string;
+    }) => void
+  ) => () => void;
+}
+
+declare global {
+  interface Window {
+    zctrlDesktopSession?: DesktopSessionBridge;
+  }
+}
+
+export interface RouterIdentitySummary {
+  id?: string;
+  name?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  boardName?: string;
+  version?: string;
+  useSsl?: boolean;
+}
+
+export interface ConnectionSessionContextType {
+  routerIdentity: RouterIdentitySummary | null;
+  userRole: OperatorRole;
+  operatorName: string;
+  tlsFingerprint: string | null;
+  isConnected: boolean;
+  isConnecting: boolean;
+  isRestoringSession: boolean;
+  isSilentReconnecting: boolean;
+  reconnectAttempts: number;
+  currentActiveTab: string;
+  savedRouters: RouterConnection[];
+  connectionProfiles: RouterConnectionProfile[];
+  activeProfileId: string | null;
+  toast: MikroTikContextType['toast'];
+}
+
+export interface RouterTelemetryContextType {
+  router: RouterConnection | null;
+  interfaces: NetworkInterface[];
+  interfaceNames: string[];
+  pingStabilizer: PingStabilizerSnapshot | null;
+  lastSyncTime: Date | null;
+  lastRealtimePacketTime: number;
+  isRealtimeWsConnected: boolean;
+  realtimeSyncMode: 'websocket' | 'smart_polling' | 'hybrid' | 'paused';
+  realtimeFrequency: number | 'auto';
+  activeRealtimeFrequencySec: number;
+  isResourceSaving: boolean;
+  thermalShieldActive: boolean;
+  ecoMode: boolean;
+  isUserIdle: boolean;
+  autoSync: boolean;
+  syncFrequency: number;
+  isOptimizingPing: boolean;
+  isSyncingSystem: boolean;
+  streamStatus: StreamStatus;
+  dataPrefetcher: DataPrefetcher;
+  backgroundSyncEngine: MikroTikContextType['backgroundSyncEngine'];
+}
+
+export interface SubscribersStateContextType {
+  users: HotspotUser[];
+  profiles: HotspotProfile[];
+  activeUsers: ActiveHotspotUser[];
+  pppSecrets: PPPSecret[];
+  pppProfiles: PPPProfile[];
+  pppActive: PPPActive[];
+  usermanUsers: UsermanUser[];
+  usermanProfiles: UsermanProfile[];
+  usermanActive: UsermanActive[];
+  selectedUsersForPrint: HotspotUser[];
+  cardTemplate: CardTemplateConfig;
+  isSyncingHotspot: boolean;
+  isSyncingPPP: boolean;
+}
+
+export interface NetworkStateContextType {
+  simpleQueues: SimpleQueue[];
+  ipBindings: HotspotIpBinding[];
+  dhcpLeases: DhcpLease[];
+  firewallRules: FirewallRule[];
+  systemLogs: SystemLogEntry[];
+  wirelessInterfaces: WirelessInterface[];
+  registrationTable: WirelessClientStation[];
+  neighbors: NeighborAntenna[];
+  remoteCaps: any[];
+  accessPoints: AccessPointItem[];
+  hotspotServerProfiles: HotspotServerProfile[];
+  hotspotServers: HotspotServerInstance[];
+  routerFiles: RouterStorageFile[];
+  scheduledTasks: ScheduledTask[];
+  isSyncingNetwork: boolean;
+  isLoadingWireless: boolean;
+  isLoadingAntennas: boolean;
+  isLoadingAccessPoints: boolean;
+  isLoadingPortalProfiles: boolean;
+  isLoadingSchedulers: boolean;
+}
+
 export interface MikroTikContextType {
   router: RouterConnection | null;
   userRole: OperatorRole;
@@ -121,6 +265,7 @@ export interface MikroTikContextType {
   tlsFingerprint: string | null;
   isConnected: boolean;
   isConnecting: boolean;
+  isRestoringSession: boolean;
   isSilentReconnecting: boolean;
   reconnectAttempts: number;
   lastSyncTime: Date | null;
@@ -164,8 +309,14 @@ export interface MikroTikContextType {
   }) => Promise<{ success: boolean; message?: string; probe?: any }>;
   toggleQosFastLane: (
     enable: boolean,
-    prioritizeManagementApi?: boolean
+    prioritizeManagementApi?: boolean,
+    options?: { interfaceList?: string; maxLimit?: string }
   ) => Promise<{ success: boolean; message?: string }>;
+  previewQosFastLane: (options?: {
+    prioritizeManagementApi?: boolean;
+    interfaceList?: string;
+    maxLimit?: string;
+  }) => Promise<{ success: boolean; rules?: QosRulePreview[]; interfaceList?: string; maxLimit?: string; message?: string }>;
 
   // Data Prefetcher
   dataPrefetcher: DataPrefetcher;
@@ -241,7 +392,16 @@ export interface MikroTikContextType {
   activateConnectionProfile: (id: string, overridePassword?: string) => Promise<{ success: boolean; message: string; needPassword?: boolean }>;
 
   // Actions
-  connectToRouter: (config: Partial<RouterConnection>) => Promise<{ success: boolean; message: string; router?: RouterConnection; suggestion?: string; rawError?: string; reasonType?: string }>;
+  connectToRouter: (config: Partial<RouterConnection>) => Promise<{
+    success: boolean;
+    message: string;
+    router?: RouterConnection;
+    suggestion?: string;
+    rawError?: string;
+    reasonType?: string;
+    pendingFingerprint?: string;
+    pinnedFingerprint?: string;
+  }>;
   cancelConnecting: () => void;
   disconnectRouter: () => void;
   syncNow: (force?: boolean) => Promise<void>;
@@ -400,6 +560,14 @@ export interface MikroTikContextType {
   showToast: ShowToastFn;
 }
 
+export type MikroTikActionsContextType = Omit<
+  MikroTikContextType,
+  | Exclude<keyof ConnectionSessionContextType, 'routerIdentity'>
+  | keyof RouterTelemetryContextType
+  | keyof SubscribersStateContextType
+  | keyof NetworkStateContextType
+>;
+
 export const defaultTemplate: CardTemplateConfig = {
   id: 'tmpl-default',
   title: 'شبكة الإنترنت السريعة',
@@ -481,48 +649,63 @@ export const DEFAULT_SCHEDULED_TASKS: ScheduledTask[] = [
   }
 ];
 
+function isShallowItemEqual(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (let i = 0; i < keysA.length; i++) {
+    const k = keysA[i];
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
+
 export function safeSet<T>(setter: React.Dispatch<React.SetStateAction<T>>, newData: T) {
   setter((prev: T) => {
     if (prev === newData) return prev;
     if (!prev || !newData) return newData;
     if (Array.isArray(prev) && Array.isArray(newData)) {
-      if (prev.length !== newData.length) return newData;
       if (prev.length === 0 && newData.length === 0) return prev;
+      if (prev.length === 0) return newData;
+      if (newData.length === 0) return newData;
 
-      const len = prev.length;
-      let hasChanged = false;
-      const sampleStep = len > 150 ? Math.floor(len / 15) : 1;
-      for (let i = 0; i < len; i += sampleStep) {
-        const p = prev[i] as any;
-        const n = newData[i] as any;
-        if (!p || !n) {
-          hasChanged = true;
-          break;
-        }
-        if (
-          p.id !== n.id ||
-          p['.id'] !== n['.id'] ||
-          p.user !== n.user ||
-          p.name !== n.name ||
-          p.address !== n.address ||
-          p.macAddress !== n.macAddress ||
-          p.callerId !== n.callerId ||
-          p.uptime !== n.uptime ||
-          p.bytesIn !== n.bytesIn ||
-          p.bytesOut !== n.bytesOut ||
-          p.disabled !== n.disabled ||
-          p.status !== n.status ||
-          p.profile !== n.profile ||
-          p.limitUptime !== n.limitUptime ||
-          p.limitBytesTotal !== n.limitBytesTotal ||
-          p.comment !== n.comment
-        ) {
-          hasChanged = true;
-          break;
+      // Build fast lookup by stable key (id / .id / name) to preserve object references for unchanged items
+      const prevMap = new Map<string, any>();
+      for (let i = 0; i < prev.length; i++) {
+        const item = prev[i] as any;
+        if (item && typeof item === 'object') {
+          const key = item.id || item['.id'] || item.name;
+          if (key) prevMap.set(String(key), item);
         }
       }
-      if (!hasChanged) return prev;
-      return newData;
+
+      let anyChanged = prev.length !== newData.length;
+      const merged = new Array(newData.length);
+
+      for (let i = 0; i < newData.length; i++) {
+        const n = newData[i] as any;
+        const pAtIdx = prev[i] as any;
+
+        if (pAtIdx && isShallowItemEqual(pAtIdx, n)) {
+          merged[i] = pAtIdx;
+          continue;
+        }
+
+        const key = n && typeof n === 'object' ? (n.id || n['.id'] || n.name) : null;
+        const pByKey = key ? prevMap.get(String(key)) : null;
+        if (pByKey && isShallowItemEqual(pByKey, n)) {
+          merged[i] = pByKey;
+          if (pByKey !== pAtIdx) anyChanged = true;
+          continue;
+        }
+
+        merged[i] = n;
+        anyChanged = true;
+      }
+
+      return anyChanged ? (merged as unknown as T) : prev;
     }
     return deepEqual(prev, newData) ? prev : newData;
   });

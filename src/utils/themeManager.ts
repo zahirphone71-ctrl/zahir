@@ -38,7 +38,7 @@ export interface AppThemePreset {
 export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
   royal_gold: {
     id: 'royal_gold',
-    name: '👑 النمط الملكي الذهبي (Royal Gold VIP)',
+    name: 'النمط الملكي الذهبي (Royal Gold VIP)',
     nameEn: 'Royal Gold',
     shortDesc: 'فخامة ملكية باللون الذهبي الدافئ والأسود الكربوني مع حواف مصقولة وتأثيرات VIP عالية التباين',
     badge: 'فاخر VIP',
@@ -56,16 +56,16 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     bgSidebar: '#0f1118',
     borderColor: '#78350f',
     textColor: '#fef3c7',
-    textMuted: '#d97706',
+    textMuted: '#f59e0b',
     borderRadius: '1rem',
-    fontFamily: "'Cairo', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #f59e0b 0%, #b45309 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(245, 158, 11, 0.25) 0%, rgba(180, 83, 9, 0.1) 100%)',
     themeClass: 'theme-royal-gold'
   },
   cyber_matrix: {
     id: 'cyber_matrix',
-    name: '⚡ النمط السايبراني المضيء (Cyber Matrix)',
+    name: 'النمط السايبراني المضيء (Cyber Matrix)',
     nameEn: 'Cyber Matrix',
     shortDesc: 'طابع مستقبلي نيون بخطوط حادة وألوان السماوي والبنفسجي الشبكي وزوايا حادة تقنية',
     badge: 'نيون مستقبلي',
@@ -85,14 +85,14 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     textColor: '#e0f2fe',
     textMuted: '#38bdf8',
     borderRadius: '0.375rem',
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "'Cairo Variable', 'JetBrains Mono Variable', system-ui, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #06b6d4 0%, #7e22ce 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(6, 182, 212, 0.25) 0%, rgba(126, 34, 206, 0.15) 100%)',
     themeClass: 'theme-cyber-matrix'
   },
   emerald_jade: {
     id: 'emerald_jade',
-    name: '🌲 النمط الزمردي الملكي (Emerald Jade)',
+    name: 'النمط الزمردي الملكي (Emerald Jade)',
     nameEn: 'Emerald Jade',
     shortDesc: 'طابع زمردي أنيق ومستقر يريح العين مع ألوان الأخضر الملكي والتايل المضيء للعمل الطويل',
     badge: 'مستقر وأنيق',
@@ -112,14 +112,14 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     textColor: '#ecfdf5',
     textMuted: '#34d399',
     borderRadius: '1.25rem',
-    fontFamily: "'Tajawal', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(16, 185, 129, 0.25) 0%, rgba(4, 120, 87, 0.1) 100%)',
     themeClass: 'theme-emerald-jade'
   },
   classic_sapphire: {
     id: 'classic_sapphire',
-    name: '💙 النمط الكلاسيكي الياقوتي (Modern ZCtrl)',
+    name: 'النمط الكلاسيكي الياقوتي (Modern ZCtrl)',
     nameEn: 'Modern Sapphire',
     shortDesc: 'التصميم القياسي المعتمد لبرنامج ZCtrl باللون الأزرق الياقوتي والكحلي الاحترافي متوازن الأبعاد',
     badge: 'الافتراضي القياسي',
@@ -137,16 +137,16 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     bgSidebar: '#0c1222',
     borderColor: '#1e293b',
     textColor: '#f1f5f9',
-    textMuted: '#60a5fa',
+    textMuted: '#94a3b8',
     borderRadius: '0.75rem',
-    fontFamily: "'Cairo', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(59, 130, 246, 0.25) 0%, rgba(29, 78, 216, 0.1) 100%)',
     themeClass: 'theme-classic-sapphire'
   },
   crimson_velvet: {
     id: 'crimson_velvet',
-    name: '🍷 النمط العنابي المخملي (Crimson Velvet)',
+    name: 'النمط العنابي المخملي (Crimson Velvet)',
     nameEn: 'Crimson Velvet',
     shortDesc: 'تباين عالي باللون الوردى العنابي والأسود المخملي مع لمسات تحذيرية حاسمة وإشارات قوية',
     badge: 'تباين عالي',
@@ -166,14 +166,14 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     textColor: '#ffe4e6',
     textMuted: '#fb7185',
     borderRadius: '0.875rem',
-    fontFamily: "'Cairo', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #f43f5e 0%, #be123c 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(244, 63, 94, 0.25) 0%, rgba(190, 18, 60, 0.1) 100%)',
     themeClass: 'theme-crimson-velvet'
   },
   clean_pearl: {
     id: 'clean_pearl',
-    name: '⚪ النمط اللؤلؤي الأبيض (Executive Light)',
+    name: 'النمط اللؤلؤي الأبيض (Executive Light)',
     nameEn: 'Executive Pearl Light',
     shortDesc: 'نمط نهاري أبيض نقي مع نصوص كحلية وتباين واضح جداً لسهولة العمل بالمكاتب المضاءة جيدا',
     badge: 'نهاري أبيض',
@@ -193,7 +193,7 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     textColor: '#0f172a',
     textMuted: '#475569',
     borderRadius: '0.75rem',
-    fontFamily: "'Tajawal', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(37, 99, 235, 0.15) 0%, rgba(30, 64, 175, 0.05) 100%)',
     isLight: true,
@@ -201,7 +201,7 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
   },
   midnight_lavender: {
     id: 'midnight_lavender',
-    name: '🔮 النمط الأرجواني الليلي (Midnight Lavender)',
+    name: 'النمط الأرجواني الليلي (Midnight Lavender)',
     nameEn: 'Midnight Lavender',
     shortDesc: 'أجواء ليلية ساحرة بلون اللافندر الأرجواني المضيء والتناغم البصري مع حواف بيضاوية رقيقة',
     badge: 'ليلي أرجواني',
@@ -221,14 +221,14 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     textColor: '#f5f3ff',
     textMuted: '#a78bfa',
     borderRadius: '1.5rem',
-    fontFamily: "'Cairo', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(139, 92, 246, 0.25) 0%, rgba(109, 40, 217, 0.1) 100%)',
     themeClass: 'theme-midnight-lavender'
   },
   deep_void: {
     id: 'deep_void',
-    name: '🌌 نمط السواد المطلق (Deep Void)',
+    name: 'نمط السواد المطلق (Deep Void)',
     nameEn: 'Deep Void',
     shortDesc: 'سواد كلي فائق (True Black #000000) لشاشات OLED مع تباين عالي للأيقونات والنصوص لأقصى راحة للعين أثناء الاستخدام الطويل ليلاً',
     badge: 'سواد نقي OLED',
@@ -248,7 +248,7 @@ export const APP_THEME_PRESETS: Record<AppThemeId, AppThemePreset> = {
     textColor: '#ffffff',
     textMuted: '#94a3b8',
     borderRadius: '0.875rem',
-    fontFamily: "'Cairo', sans-serif",
+    fontFamily: "'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif",
     buttonGradient: 'linear-gradient(135deg, #0284c7 0%, #4338ca 100%)',
     sidebarActiveBg: 'linear-gradient(90deg, rgba(56, 189, 248, 0.25) 0%, rgba(67, 56, 202, 0.12) 100%)',
     themeClass: 'theme-deep-void'
@@ -277,20 +277,26 @@ export const getSavedCustomThemeElements = (): CustomThemeElements => {
   try {
     const raw = safeStorage.getItem('zctrl_custom_theme_elements');
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch (err) {
+    console.warn('[themeManager] failed to parse custom theme elements', err);
+  }
   return {};
 };
 
 export const saveCustomThemeElements = (elements: CustomThemeElements) => {
   try {
     safeStorage.setItem('zctrl_custom_theme_elements', JSON.stringify(elements));
-  } catch {}
+  } catch (err) {
+    console.warn('[themeManager] failed to save custom theme elements', err);
+  }
 };
 
 export const resetCustomThemeElements = () => {
   try {
     safeStorage.removeItem('zctrl_custom_theme_elements');
-  } catch {}
+  } catch (err) {
+    console.warn('[themeManager] failed to reset custom theme elements', err);
+  }
 };
 
 export const getSavedAppTheme = (): AppThemeId => {
@@ -299,8 +305,8 @@ export const getSavedAppTheme = (): AppThemeId => {
     if (stored && APP_THEME_PRESETS[stored]) {
       return stored;
     }
-  } catch {
-    // fallback
+  } catch (err) {
+    console.warn('[themeManager] failed to read saved app theme', err);
   }
   return 'classic_sapphire';
 };
@@ -311,8 +317,8 @@ export const applyAppTheme = (themeId: AppThemeId, customOverrides?: CustomTheme
 
   try {
     safeStorage.setItem('zctrl_global_app_theme', themeId);
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[themeManager] failed to persist app theme', err);
   }
 
   const merged = {
@@ -351,7 +357,9 @@ export const applyAppTheme = (themeId: AppThemeId, customOverrides?: CustomTheme
   root.style.setProperty('--app-theme-radius', merged.borderRadius);
   root.style.setProperty('--app-theme-font', merged.fontFamily);
   if (merged.fontSize) {
-    root.style.setProperty('--app-font-scale', `${merged.fontSize}%`);
+    const scalePct = Number(merged.fontSize) || 100;
+    root.style.setProperty('--app-font-scale', `${scalePct}%`);
+    root.style.setProperty('--app-base-font-size', `calc(16px * ${scalePct} / 100)`);
   }
   root.style.setProperty('--app-theme-button-gradient', merged.buttonGradient || `linear-gradient(135deg, ${merged.primaryColor} 0%, ${merged.secondaryColor} 100%)`);
   root.style.setProperty('--app-theme-sidebar-active', merged.sidebarActiveBg || `linear-gradient(90deg, ${merged.primaryColor}33 0%, ${merged.secondaryColor}10 100%)`);
@@ -362,8 +370,8 @@ export const applyAppTheme = (themeId: AppThemeId, customOverrides?: CustomTheme
     if (metaTheme) {
       metaTheme.setAttribute('content', merged.bgHeader || merged.bgMain);
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[themeManager] failed to update meta theme-color', err);
   }
 
   // Dispatch custom event for real-time reactivity

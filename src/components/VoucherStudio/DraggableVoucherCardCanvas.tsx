@@ -3,14 +3,22 @@ import { QRCodeSVG } from "qrcode.react";
 import { 
   Move, RotateCcw, QrCode, Eye, EyeOff, 
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Plus, Minus,
-  Upload, Trash2, Printer, Sliders
+  Upload, Trash2, Printer, Sliders, Tag, Clock, BarChart2, AlertTriangle
 } from "lucide-react";
 import { VoucherDesignState, VoucherProfile } from "./types";
 import { THEME_PRESETS } from "./themePresets";
 import { buildAutoLoginQrUrl } from "./qrUtils";
 import { DEFAULT_SMART_COORDS } from "./smartCoords";
 import { VoucherCardPreview } from "./VoucherCardPreview";
-import { GridResult } from "./gridCalculator";
+import { GridResult, getPaperSpec } from "./gridCalculator";
+import {
+  buildContext,
+  computeCardStyle,
+  computeBoxStyle,
+  computePriceStyle,
+  resolveFontStack,
+  sanitizeImageSrc,
+} from "./voucherRenderCore";
 
 interface DraggableVoucherCardCanvasProps {
   design: VoucherDesignState;
@@ -38,16 +46,6 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
 
   const isDraggingRef = useRef(false);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
-
-  const fontMap: Record<string, string> = {
-    Tajawal: "'Tajawal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif",
-    Cairo: "'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif",
-    Amiri: "'Amiri', serif",
-    Almarai: "'Almarai', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif",
-    "JetBrains Mono": "'JetBrains Mono', 'Courier New', monospace",
-    monospace: "'Courier New', monospace",
-    sans: "sans-serif"
-  };
 
   const preset = THEME_PRESETS[design.theme] || THEME_PRESETS.modern;
 
@@ -185,69 +183,14 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
     }));
   };
 
-  // Card style based on design theme and preset
-  const getCardStyle = (): React.CSSProperties => {
-    const preset = THEME_PRESETS[design.theme] || THEME_PRESETS.modern;
-    const bg = design.bgColor || preset.bgColor;
-    const gradient = preset.cardBgGradient;
-
-    let border = '';
-    if (preset.cardBorderStyle === 'none') {
-      border = 'none';
-    } else if (preset.cardBorderStyle === 'double') {
-      border = `${preset.cardBorderWidth * 3}px double ${design.borderColor || preset.borderColor}`;
-    } else {
-      border = `${preset.cardBorderWidth}px ${preset.cardBorderStyle} ${design.borderColor || preset.borderColor}`;
-    }
-
-    return {
-      background: gradient || bg,
-      border,
-      boxShadow: preset.cardShadow,
-      borderRadius: `${preset.cardRadius}px`,
-      fontFamily: fontMap[design.fontFamily || preset.fontFamily] || "'Tajawal', sans-serif",
-      backdropFilter: design.theme === 'glass' ? 'blur(10px)' : undefined,
-    };
-  };
-
-  const getBoxStyles = (
-    boxStyle: 'box' | 'underline' | 'pill' | 'none',
-    bg: string,
-    border: string
-  ): React.CSSProperties => {
-    switch (boxStyle) {
-      case 'underline':
-        return {
-          background: 'transparent',
-          border: 'none',
-          borderBottom: `2px solid ${border}`,
-          borderRadius: 0,
-          padding: '1px 4px 2px',
-        };
-      case 'pill':
-        return {
-          background: bg,
-          border: `1px solid ${border}`,
-          borderRadius: '999px',
-          padding: '2px 10px',
-        };
-      case 'none':
-        return {
-          background: 'transparent',
-          border: 'none',
-          borderRadius: 0,
-          padding: '1px 2px',
-        };
-      case 'box':
-      default:
-        return {
-          background: bg,
-          border: `1px solid ${border}`,
-          borderRadius: '4px',
-          padding: '2px 6px',
-        };
-    }
-  };
+  const canvasCtx = buildContext(design, 1.0, design.qrSize);
+  const getCardStyle = (): React.CSSProperties => ({
+    ...computeCardStyle(canvasCtx),
+    backdropFilter: design.theme === 'glass' ? 'blur(10px)' : undefined,
+  });
+  const canvasPriceStyle = computePriceStyle(preset, 1.0);
+  const safeBgImage = design.showBgImage !== false ? sanitizeImageSrc(design.bgImage) : '';
+  const activePaperLabel = gridInfo?.paperLabel || getPaperSpec(design.paperType, design.paperOrientation).paperLabel;
 
   const getElementShadow = (hasShadow: boolean, shadowColor?: string): string => {
     if (!hasShadow) return 'none';
@@ -300,20 +243,28 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
     <div className="space-y-3">
       {/* Real Grid Info Banner */}
       {gridInfo && (
-        <div className="flex flex-wrap items-center justify-between gap-2 bg-emerald-950/60 border border-emerald-500/30 p-2.5 rounded-xl text-[11px]">
-          <div className="flex items-center gap-2">
-            <span className="text-emerald-400 font-black flex items-center gap-1">
-              <span>📐 التوزيع الفعلي على A4:</span>
-            </span>
-            <span className="bg-emerald-900/80 text-emerald-200 px-2 py-0.5 rounded font-mono font-bold border border-emerald-700/50">
-              {gridInfo.cols} × {gridInfo.rows} = {gridInfo.totalPerPage} كرت/صفحة
-            </span>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-emerald-950/60 border border-emerald-500/30 p-2.5 rounded-xl text-[11px]">
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400 font-black flex items-center gap-1">
+                <span>📐 التوزيع الفعلي على {activePaperLabel}:</span>
+              </span>
+              <span className="bg-emerald-900/80 text-emerald-200 px-2 py-0.5 rounded font-mono font-bold border border-emerald-700/50">
+                {gridInfo.cols} × {gridInfo.rows} = {gridInfo.totalPerPage} كرت/صفحة
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-emerald-300/80">
+              <span>كرت فعلي: <strong className="text-white font-mono">{gridInfo.actualCardWidthMm} × {gridInfo.actualCardHeightMm} مم</strong></span>
+              <span>نسبة الخط: <strong className="text-emerald-200 font-mono">{Math.round((fontScale ?? gridInfo.fontScale) * 100)}%</strong></span>
+              <span><strong className="text-emerald-200 font-mono">{gridInfo.totalPages}</strong> صفحة لـ <strong className="text-emerald-200 font-mono">{gridInfo.totalCards}</strong> كرت</span>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-emerald-300/80">
-            <span>كرت فعلي: <strong className="text-white font-mono">{gridInfo.actualCardWidthMm} × {gridInfo.actualCardHeightMm} مم</strong></span>
-            <span>نسبة الخط: <strong className="text-emerald-200 font-mono">{Math.round((fontScale ?? gridInfo.fontScale) * 100)}%</strong></span>
-            <span><strong className="text-emerald-200 font-mono">{gridInfo.totalPages}</strong> صفحة لـ <strong className="text-emerald-200 font-mono">{gridInfo.totalCards}</strong> كرت</span>
-          </div>
+          {gridInfo.readabilityWarning && (
+            <div className="flex items-start gap-2 bg-amber-950/60 border border-amber-500/40 px-3 py-2 rounded-xl text-[11px] text-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>{gridInfo.readabilityWarning}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -467,9 +418,9 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
         }}
       >
         {/* Render Background Image if uploaded or defined */}
-        {design.bgImage && (
+        {safeBgImage && (
           <img
-            src={design.bgImage}
+            src={safeBgImage}
             alt="Card Background"
             className="absolute inset-0 w-full h-full object-cover opacity-30 pointer-events-none z-0"
           />
@@ -542,7 +493,7 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.network?.y ?? 15}%`,
               color: elements.network?.color || preset.elements.network.color,
               fontSize: `${elements.network?.fontSize || preset.elements.network.fontSize || 13}px`,
-              fontFamily: fontMap[elements.network?.fontFamily || design.fontFamily || preset.fontFamily],
+              fontFamily: resolveFontStack(elements.network?.fontFamily || design.fontFamily || preset.fontFamily),
               fontWeight: (elements.network?.fontWeight || preset.elements.network.fontWeight || "bold") as any,
               letterSpacing: `${elements.network?.letterSpacing ?? preset.elements.network.letterSpacing ?? 0}px`,
               transform: `translate(-50%, -50%) rotate(${elements.network?.rotation || 0}deg)`,
@@ -569,29 +520,12 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.price?.y ?? 15}%`,
               color: elements.price?.color || preset.elements.price.color,
               fontSize: `${elements.price?.fontSize || preset.elements.price.fontSize || 12}px`,
-              fontFamily: fontMap[elements.price?.fontFamily || design.fontFamily || preset.fontFamily],
+              fontFamily: resolveFontStack(elements.price?.fontFamily || design.fontFamily || preset.fontFamily),
               fontWeight: (elements.price?.fontWeight || preset.elements.price.fontWeight || "bold") as any,
               letterSpacing: `${elements.price?.letterSpacing ?? preset.elements.price.letterSpacing ?? 0}px`,
               transform: `translate(-50%, -50%) rotate(${elements.price?.rotation || 0}deg)`,
               textShadow: getElementShadow(elements.price?.hasShadow ?? preset.elements.price.hasShadow, elements.price?.shadowColor ?? preset.elements.price.shadowColor),
-              ...(preset.priceStyle === 'badge' ? {
-                background: preset.primaryColor,
-                color: '#ffffff',
-                padding: '2px 8px',
-                borderRadius: '999px',
-                fontWeight: '800' as any,
-              } : {}),
-              ...(preset.priceStyle === 'highlight' ? {
-                background: 'rgba(255,255,255,0.1)',
-                padding: '1px 6px',
-                borderRadius: '4px',
-                border: `1px solid ${preset.primaryColor}`,
-              } : {}),
-              ...(preset.priceStyle === 'strikethrough' ? {
-                textDecoration: 'line-through',
-                textDecorationColor: preset.primaryColor,
-                textDecorationThickness: '2px',
-              } : {}),
+              ...canvasPriceStyle,
             }}
           >
             {activeProfileObj?.price !== undefined ? activeProfileObj.price : design.price !== undefined ? design.price : 500} {design.currencySymbol || "ريال"}
@@ -614,15 +548,16 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.user?.y ?? (design.authMode === 'user_only' && !design.showQr ? 50 : 44)}%`,
               color: elements.user?.color || preset.elements.user.color,
               fontSize: `${elements.user?.fontSize || preset.elements.user.fontSize || 15}px`,
-              fontFamily: fontMap[elements.user?.fontFamily || preset.elements.user.fontFamily || "JetBrains Mono"],
+              fontFamily: resolveFontStack(elements.user?.fontFamily || preset.elements.user.fontFamily || "JetBrains Mono"),
               fontWeight: (elements.user?.fontWeight || preset.elements.user.fontWeight || "extrabold") as any,
               letterSpacing: `${elements.user?.letterSpacing ?? preset.elements.user.letterSpacing ?? 0.5}px`,
               transform: `translate(-50%, -50%) rotate(${elements.user?.rotation || 0}deg)`,
               textShadow: getElementShadow(elements.user?.hasShadow ?? preset.elements.user.hasShadow, elements.user?.shadowColor ?? preset.elements.user.shadowColor),
-              ...getBoxStyles(
+              ...computeBoxStyle(
                 preset.userBoxStyle || 'box',
                 preset.userBoxBg,
-                preset.userBoxBorder
+                preset.userBoxBorder,
+                1.0
               ),
             }}
           >
@@ -647,15 +582,16 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.password?.y ?? 68}%`,
               color: elements.password?.color || preset.elements.password.color,
               fontSize: `${elements.password?.fontSize || preset.elements.password.fontSize || 13}px`,
-              fontFamily: fontMap[elements.password?.fontFamily || preset.elements.password.fontFamily || "JetBrains Mono"],
+              fontFamily: resolveFontStack(elements.password?.fontFamily || preset.elements.password.fontFamily || "JetBrains Mono"),
               fontWeight: (elements.password?.fontWeight || preset.elements.password.fontWeight || "bold") as any,
               letterSpacing: `${elements.password?.letterSpacing ?? preset.elements.password.letterSpacing ?? 0.5}px`,
               transform: `translate(-50%, -50%) rotate(${elements.password?.rotation || 0}deg)`,
               textShadow: getElementShadow(elements.password?.hasShadow ?? preset.elements.password.hasShadow, elements.password?.shadowColor ?? preset.elements.password.shadowColor),
-              ...getBoxStyles(
+              ...computeBoxStyle(
                 preset.passBoxStyle || 'box',
                 preset.passBoxBg,
-                preset.passBoxBorder
+                preset.passBoxBorder,
+                1.0
               ),
             }}
           >
@@ -693,7 +629,7 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
             onMouseDown={(e) => handleDragStart("time", e)}
             onTouchStart={(e) => handleDragStart("time", e)}
             onClick={() => setActiveElement("time")}
-            className={`absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing px-2 py-0.5 rounded font-bold transition-shadow whitespace-nowrap ${
+            className={`absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing px-2 py-0.5 rounded font-bold transition-shadow whitespace-nowrap inline-flex items-center gap-0.5 ${
               activeElement === "time"
                 ? "ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 bg-amber-400/10 z-30"
                 : "hover:ring-1 hover:ring-indigo-400/60 z-10"
@@ -703,14 +639,15 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.time?.y ?? 88}%`,
               color: elements.time?.color || preset.elements.time.color,
               fontSize: `${elements.time?.fontSize || preset.elements.time.fontSize || 10}px`,
-              fontFamily: fontMap[elements.time?.fontFamily || design.fontFamily || preset.fontFamily],
+              fontFamily: resolveFontStack(elements.time?.fontFamily || design.fontFamily || preset.fontFamily),
               fontWeight: (elements.time?.fontWeight || preset.elements.time.fontWeight || "normal") as any,
               letterSpacing: `${elements.time?.letterSpacing ?? preset.elements.time.letterSpacing ?? 0}px`,
               transform: `translate(-50%, -50%) rotate(${elements.time?.rotation || 0}deg)`,
               textShadow: getElementShadow(elements.time?.hasShadow ?? preset.elements.time.hasShadow, elements.time?.shadowColor ?? preset.elements.time.shadowColor)
             }}
           >
-            ⏱️ {design.timeLimit || activeProfileObj?.validity || "30 يوم"}
+            <Clock style={{ width: '0.95em', height: '0.95em', flexShrink: 0 }} />
+            <span>{design.timeLimit || activeProfileObj?.validity || "30 يوم"}</span>
           </div>
         )}
 
@@ -720,7 +657,7 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
             onMouseDown={(e) => handleDragStart("profile", e)}
             onTouchStart={(e) => handleDragStart("profile", e)}
             onClick={() => setActiveElement("profile")}
-            className={`absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing px-2 py-0.5 rounded font-bold transition-shadow whitespace-nowrap ${
+            className={`absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing px-2 py-0.5 rounded font-bold transition-shadow whitespace-nowrap inline-flex items-center gap-0.5 ${
               activeElement === "profile"
                 ? "ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 bg-amber-400/10 z-30"
                 : "hover:ring-1 hover:ring-indigo-400/60 z-10"
@@ -730,14 +667,15 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.profile?.y ?? 15}%`,
               color: elements.profile?.color || preset.elements.profile.color,
               fontSize: `${elements.profile?.fontSize || preset.elements.profile.fontSize || 11}px`,
-              fontFamily: fontMap[elements.profile?.fontFamily || design.fontFamily || preset.fontFamily],
+              fontFamily: resolveFontStack(elements.profile?.fontFamily || design.fontFamily || preset.fontFamily),
               fontWeight: (elements.profile?.fontWeight || preset.elements.profile.fontWeight || "bold") as any,
               letterSpacing: `${elements.profile?.letterSpacing ?? preset.elements.profile.letterSpacing ?? 0}px`,
               transform: `translate(-50%, -50%) rotate(${elements.profile?.rotation || 0}deg)`,
               textShadow: getElementShadow(elements.profile?.hasShadow ?? preset.elements.profile.hasShadow, elements.profile?.shadowColor ?? preset.elements.profile.shadowColor)
             }}
           >
-            🏷️ {design.targetProfile || activeProfileObj?.profileName || "باقة VIP"}
+            <Tag style={{ width: '0.95em', height: '0.95em', flexShrink: 0 }} />
+            <span>{design.targetProfile || activeProfileObj?.profileName || "باقة VIP"}</span>
           </div>
         )}
 
@@ -747,7 +685,7 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
             onMouseDown={(e) => handleDragStart("dataLimit", e)}
             onTouchStart={(e) => handleDragStart("dataLimit", e)}
             onClick={() => setActiveElement("dataLimit")}
-            className={`absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing px-2 py-0.5 rounded font-bold transition-shadow whitespace-nowrap ${
+            className={`absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing px-2 py-0.5 rounded font-bold transition-shadow whitespace-nowrap inline-flex items-center gap-0.5 ${
               activeElement === "dataLimit"
                 ? "ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 bg-amber-400/10 z-30"
                 : "hover:ring-1 hover:ring-indigo-400/60 z-10"
@@ -757,14 +695,15 @@ export const DraggableVoucherCardCanvas: React.FC<DraggableVoucherCardCanvasProp
               top: `${coords.dataLimit?.y ?? 88}%`,
               color: elements.dataLimit?.color || preset.elements.dataLimit.color,
               fontSize: `${elements.dataLimit?.fontSize || preset.elements.dataLimit.fontSize || 10}px`,
-              fontFamily: fontMap[elements.dataLimit?.fontFamily || design.fontFamily || preset.fontFamily],
+              fontFamily: resolveFontStack(elements.dataLimit?.fontFamily || design.fontFamily || preset.fontFamily),
               fontWeight: (elements.dataLimit?.fontWeight || preset.elements.dataLimit.fontWeight || "bold") as any,
               letterSpacing: `${elements.dataLimit?.letterSpacing ?? preset.elements.dataLimit.letterSpacing ?? 0}px`,
               transform: `translate(-50%, -50%) rotate(${elements.dataLimit?.rotation || 0}deg)`,
               textShadow: getElementShadow(elements.dataLimit?.hasShadow ?? preset.elements.dataLimit.hasShadow, elements.dataLimit?.shadowColor ?? preset.elements.dataLimit.shadowColor)
             }}
           >
-            📊 {design.dataLimit || "5 GB"}
+            <BarChart2 style={{ width: '0.95em', height: '0.95em', flexShrink: 0 }} />
+            <span>{design.dataLimit || "5 GB"}</span>
           </div>
         )}
       </div>

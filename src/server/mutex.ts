@@ -5,6 +5,7 @@
 export class Mutex {
   private queue: Array<() => void> = [];
   private locked = false;
+  private onIdleCleanup?: () => void;
 
   async acquire(): Promise<() => void> {
     return new Promise<() => void>((resolve) => {
@@ -26,6 +27,18 @@ export class Mutex {
     if (next) {
       // إعطاء فرصة للمهام الأخرى للتنفيذ دون تجميد الحلقة
       setImmediate(next);
+    } else if (this.onIdleCleanup) {
+      const cb = this.onIdleCleanup;
+      this.onIdleCleanup = undefined;
+      cb();
+    }
+  }
+
+  public scheduleIdleCleanup(cb: () => void): void {
+    if (!this.locked && this.queue.length === 0) {
+      cb();
+    } else {
+      this.onIdleCleanup = cb;
     }
   }
 
@@ -49,4 +62,27 @@ export function getRouterMutex(routerId: string): Mutex {
     routerLocks.set(routerId, new Mutex());
   }
   return routerLocks.get(routerId)!;
+}
+
+export function deleteRouterMutex(routerId: string): boolean {
+  const existing = routerLocks.get(routerId);
+  if (!existing) return false;
+  existing.scheduleIdleCleanup(() => {
+    if (routerLocks.get(routerId) === existing && !existing.isLocked && existing.queueLength === 0) {
+      routerLocks.delete(routerId);
+    }
+  });
+  return true;
+}
+
+export function clearRouterLocks(): void {
+  for (const [id, mutex] of routerLocks.entries()) {
+    if (!mutex.isLocked && mutex.queueLength === 0) {
+      routerLocks.delete(id);
+    }
+  }
+}
+
+export function getRouterLockCount(): number {
+  return routerLocks.size;
 }

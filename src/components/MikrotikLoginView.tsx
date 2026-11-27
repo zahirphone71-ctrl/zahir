@@ -16,7 +16,8 @@ import {
   RefreshCw,
   Home,
   Building2,
-  Store
+  Store,
+  X
 } from 'lucide-react';
 import { RouterConnectionProfilesModal } from './connection/RouterConnectionProfilesModal';
 import { RouterConnectionProfile } from '../types/mikrotik';
@@ -30,7 +31,8 @@ const getSafeSavedConfig = () => {
   try {
     const raw = safeStorage.getItem('zahir_config_partial');
     return raw ? JSON.parse(raw) : {};
-  } catch {
+  } catch (err) {
+    console.warn('Failed to parse zahir_config_partial:', err);
     return {};
   }
 };
@@ -53,7 +55,8 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
   const [lang, setLang] = useState<'ar' | 'en'>(() => {
     try {
       return (safeStorage.getItem('zahir_language') as 'ar' | 'en') || 'ar';
-    } catch {
+    } catch (err) {
+      console.warn('Failed to read zahir_language:', err);
       return 'ar';
     }
   });
@@ -62,7 +65,9 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
     setLang(newLang);
     try {
       safeStorage.setItem('zahir_language', newLang);
-    } catch {}
+    } catch (err) {
+      console.warn('Failed to persist zahir_language:', err);
+    }
   };
 
   // Connection Error Banner State (Clear reason & Actionable steps)
@@ -71,14 +76,16 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
     suggestion?: string;
     reasonType?: string;
     rawError?: string;
+    pendingFingerprint?: string;
     host?: string;
   } | null>(null);
+  const lastRouterAttemptRef = useRef<any>(null);
 
   // RouterOS Admin Form State (Strictly Real MikroTik Defaults)
   const [name, setName] = useState('MikroTik RouterOS');
   const [host, setHost] = useState(() => {
     const saved = getSafeSavedConfig();
-    return saved.ip || '192.168.88.1';
+    return saved.ip || '';
   });
   const [customPort, setCustomPort] = useState<string>(() => {
     const saved = getSafeSavedConfig();
@@ -104,7 +111,9 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
       safeStorage.removeItem('zcontrol_cached_pass');
       safeStorage.removeItem('zcontrol_save_password_opt');
       safeStorage.removeItem('zahir_auto_connect');
-    } catch {}
+    } catch (err) {
+      console.warn('Failed to purge legacy cached credentials:', err);
+    }
     return () => {
       isMountedRef.current = false;
       diagnoseAbortRef.current?.abort();
@@ -207,13 +216,15 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
       if (saved.user && !username) setUsername(saved.user.trim());
       if (saved.port && !customPort && saved.port !== '8728') setCustomPort(saved.port.toString());
       if (saved.name && !name) setName(saved.name.trim());
-    } catch {}
+    } catch (err) {
+      console.warn('Failed to restore partial login config:', err);
+    }
   }, []);
 
   const handleLoginFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget as HTMLFormElement);
-    const ipVal = (formData.get('ip') as string) || '192.168.88.1';
+    const ipVal = ((formData.get('ip') as string) || '').trim();
     const userVal = (formData.get('user') as string) || 'admin';
     const passVal = (formData.get('pass') as string) || '';
     const rememberVal = formData.get('remember') === 'on' || formData.get('remember') === 'true';
@@ -249,12 +260,13 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
       username: userVal.trim(),
       password: passVal.trim(),
       useSsl: formUseSsl,
-      ...(formStrictTls ? { strictTls: true } : {}),
+      strictTls: formStrictTls,
       ...(formTlsFingerprint ? { tlsFingerprint: formTlsFingerprint } : {}),
       ...(formOperatorUsername ? { operatorUsername: formOperatorUsername } : {}),
       ...(formOperatorPassword ? { operatorPassword: formOperatorPassword } : {}),
     };
 
+    lastRouterAttemptRef.current = routerConfig;
     setConnectionError(null);
     safeStorage.removeItem('zctrl_explicit_logout');
     safeStorage.removeItem('zctrl_auto_connect_attempted_session');
@@ -282,7 +294,9 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
         // Zero Password Retention: ensure password is never written to storage
         safeStorage.removeItem('zcontrol_cached_pass');
         safeStorage.removeItem('zcontrol_save_password_opt');
-      } catch {}
+      } catch (err) {
+        console.warn('Failed to update saved router storage preferences:', err);
+      }
       if (onSuccessNavigate) {
         onSuccessNavigate();
       }
@@ -292,7 +306,33 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
         suggestion: result.suggestion,
         reasonType: result.reasonType,
         rawError: result.rawError,
+        pendingFingerprint: result.pendingFingerprint,
         host: ipVal.trim()
+      });
+    }
+  };
+
+  const handleAcceptTlsFingerprint = async (fingerprint: string) => {
+    const prev = lastRouterAttemptRef.current;
+    if (!prev) return;
+    setConnectionError(null);
+    const result = await connectToRouter({
+      ...prev,
+      tlsFingerprint: fingerprint,
+      acceptTlsFingerprint: true,
+      strictTls: true
+    });
+    if (!isMountedRef.current) return;
+    if (result.success && result.router) {
+      if (onSuccessNavigate) onSuccessNavigate();
+    } else {
+      setConnectionError({
+        message: result.message || 'تعذر الاتصال بالبصمة المثبتة',
+        suggestion: result.suggestion,
+        reasonType: result.reasonType,
+        rawError: result.rawError,
+        pendingFingerprint: result.pendingFingerprint,
+        host: prev.host
       });
     }
   };
@@ -373,11 +413,11 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                 <div>
                   <h3 className="text-xs font-bold text-white flex items-center gap-2">
                     <span>بروفايلات الاتصال السريع بالراوتر</span>
-                    <span className="text-[10px] text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                      تبديل بضغطة زر ⚡
+                    <span className="text-xs text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                      تبديل بضغطة زر
                     </span>
                   </h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-400 mt-0.5">
                     اختر الراوتر المطلوب (منزل، مكتب، فرع) للاتصال المباشر دون إعادة إدخال البيانات في كل مرة
                   </p>
                 </div>
@@ -386,7 +426,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
               <button
                 type="button"
                 onClick={() => setShowProfilesModal(true)}
-                className="px-3 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                className="px-3 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 <SlidersHorizontal className="w-3.5 h-3.5 text-blue-400" />
                 <span>إدارة البروفايلات</span>
@@ -411,7 +451,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                       </div>
                       <div className="min-w-0 flex-1">
                         <span className="text-xs font-bold text-white truncate block">{p.name}</span>
-                        <span className="text-[10px] text-slate-400 font-mono block truncate" dir="ltr">
+                        <span className="text-xs text-slate-400 font-mono block truncate" dir="ltr">
                           {p.host}:{p.port || 8728}
                         </span>
                       </div>
@@ -421,10 +461,10 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                       type="button"
                       onClick={() => handleProfileOneClick(p)}
                       disabled={isConnecting}
-                      className="w-full py-2 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-blue-600/20 active:scale-95 disabled:opacity-50"
+                      className="w-full py-2 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-blue-600/20 active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                     >
                       <Zap className="w-3.5 h-3.5 text-amber-300" />
-                      <span>{p.password ? 'اتصال فوري ⚡' : 'تحديد البروفايل'}</span>
+                      <span>{p.password ? 'اتصال فوري' : 'تحديد البروفايل'}</span>
                     </button>
                   </div>
                 );
@@ -440,6 +480,9 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
             isLoading={isConnecting}
             error={connectionError?.message}
             suggestion={connectionError?.suggestion}
+            reasonType={connectionError?.reasonType}
+            pendingFingerprint={connectionError?.pendingFingerprint}
+            onAcceptTlsFingerprint={handleAcceptTlsFingerprint}
             lang={lang}
             setLang={handleSetLang}
             onCancel={cancelConnecting}
@@ -456,15 +499,15 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
 
           {/* Quick Actions & Diagnostic Panel */}
           <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-wrap gap-3 items-center justify-between">
-            <div className="text-right">
+            <div className="text-start">
               <h4 className="text-xs font-bold text-slate-300">أدوات الفحص والتشخيص المتقدمة</h4>
-              <p className="text-[10px] text-slate-500">تحقق من حالة المنفذ وقابلية الوصول للراوتر الفعلي</p>
+              <p className="text-xs text-slate-400">تحقق من حالة المنفذ وقابلية الوصول للراوتر الفعلي</p>
             </div>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setShowRemoteGuide(true)}
-                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 <Globe className="w-3.5 h-3.5 text-blue-400" />
                 <span>دليل الاتصال الفني عن بعد</span>
@@ -473,7 +516,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                 type="button"
                 onClick={() => runPortDiagnosis(host)}
                 disabled={isDiagnosing}
-                className="px-3 py-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/20 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                className="px-3 py-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/20 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isDiagnosing ? 'animate-spin' : ''}`} />
                 <span>تشخيص منفذ الاتصال</span>
@@ -483,9 +526,9 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
 
           {/* Diagnostic Results Display */}
           {diagnosticResult && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 text-right">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 text-start">
               <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-[10px] text-slate-500 font-mono">RTT: {diagnosticResult.latencyMs}ms</span>
+                <span className="text-xs text-slate-400 font-mono">RTT: {diagnosticResult.latencyMs}ms</span>
                 <h4 className="text-xs font-black text-emerald-400 flex items-center gap-1.5">
                   <Activity className="w-3.5 h-3.5" />
                   <span>تقرير تشخيص منافذ وخدمات الراوتر التلقائي</span>
@@ -505,16 +548,16 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-mono font-black text-[11px]">{p.port}</span>
+                        <span className="font-mono font-black text-xs">{p.port}</span>
                         <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold ${
-                            p.open ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                          className={`text-xs px-1.5 py-0.5 rounded-md font-bold ${
+                            p.open ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
                           }`}
                         >
                           {p.open ? `مفتوح ${p.latency}ms` : 'مغلق'}
                         </span>
                       </div>
-                      <span className="text-[10px] font-semibold mt-1 truncate">{p.name}</span>
+                      <span className="text-xs font-semibold mt-1 truncate">{p.name}</span>
                     </div>
                   ))
                 ) : (
@@ -559,12 +602,12 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                         showToast(`تم تعيين المنفذ ${diagnosticResult.recommendedPort} تلقائياً`, 'info');
                       }
                     }}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer shrink-0"
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                   >
                     استخدام هذا المنفذ في خانة الاتصال
                   </button>
-                  <div className="text-right">
-                    <span className="text-[10px] text-blue-300 block">منفذ الإدارة الموصى به:</span>
+                  <div className="text-start">
+                    <span className="text-xs text-blue-300 block">منفذ الإدارة الموصى به:</span>
                     <span className="text-xs font-bold text-white font-mono">
                       Port {diagnosticResult.recommendedPort} ({diagnosticResult.recommendedService || 'API'})
                     </span>
@@ -572,7 +615,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                 </div>
               )}
 
-              <p className="text-[11px] text-slate-400 bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 leading-relaxed">
+              <p className="text-xs text-slate-400 bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 leading-relaxed">
                 {diagnosticResult.diagnosticMessage}
               </p>
             </div>
@@ -580,9 +623,9 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
 
           {/* Saved Routers Section (if any saved) */}
           {savedRouters.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 text-right">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 text-start">
               <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="bg-blue-900/40 text-blue-300 border border-blue-700/50 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold">
+                <span className="bg-blue-900/40 text-blue-300 border border-blue-700/50 px-2 py-0.5 rounded-full text-xs font-mono font-bold">
                   {savedRouters.length} راوترات
                 </span>
                 <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -607,25 +650,26 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                           <div className="flex items-center gap-2">
                             <h4 className="font-bold text-xs text-white">{r.name}</h4>
                             {isCurrent && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-bold">
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">
                                 متصل
                               </span>
                             )}
                           </div>
-                          <div className="text-[11px] text-slate-400 mt-0.5 font-mono" dir="ltr">
+                          <div className="text-xs text-slate-400 mt-0.5 font-mono" dir="ltr">
                             {r.host}:{r.port || 8728} • {r.username}
                           </div>
                         </div>
                         <button
                           type="button"
                           onClick={() => deleteSavedRouter(r.id)}
-                          className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer"
+                          aria-label="حذف الراوتر المحفوظ"
+                          className="p-1 text-slate-400 hover:text-rose-400 rounded transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                           title="حذف"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
                         <span className="text-slate-400 font-mono">
                           {r.boardName || 'RouterBOARD'} {r.version && `(${r.version})`}
                         </span>
@@ -633,7 +677,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                           type="button"
                           onClick={() => handlePromptSavedConnect(r)}
                           disabled={isConnecting}
-                          className="bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold py-1 px-2.5 rounded-lg flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50"
+                          className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-1 px-2.5 rounded-lg flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                         >
                           <Zap className="w-3 h-3" />
                           <span>اتصال</span>
@@ -650,7 +694,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
         {/* Modal: Enter password to connect to saved router */}
         {savedRouterToConnect && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4 text-right" dir="rtl">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4 text-start" dir="rtl">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div className="flex items-center gap-2">
                   <div className="p-2 bg-blue-600/20 text-blue-400 rounded-lg">
@@ -658,7 +702,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-white">تسجيل الدخول إلى {savedRouterToConnect.name}</h3>
-                    <p className="text-[11px] text-slate-400 font-mono" dir="ltr">{savedRouterToConnect.host} ({savedRouterToConnect.username})</p>
+                    <p className="text-xs text-slate-400 font-mono" dir="ltr">{savedRouterToConnect.host} ({savedRouterToConnect.username})</p>
                   </div>
                 </div>
               </div>
@@ -675,13 +719,14 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                       autoFocus
                       autoComplete="new-password"
                       data-lpignore="true"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono text-left pl-10"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-blue-500 font-mono text-left pl-10"
                       dir="ltr"
                     />
                     <button
                       type="button"
                       onClick={() => setShowSavedPassword(!showSavedPassword)}
-                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer"
+                      aria-label={showSavedPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                     >
                       {showSavedPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -692,7 +737,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                   <button
                     type="submit"
                     disabled={isConnecting}
-                    className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                    className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                   >
                     {isConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                     <span>اتصال</span>
@@ -701,7 +746,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                   <button
                     type="button"
                     onClick={() => setSavedRouterToConnect(null)}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                   >
                     إلغاء
                   </button>
@@ -723,9 +768,10 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
                 <button
                   type="button"
                   onClick={() => setShowRemoteGuide(false)}
-                  className="text-slate-400 hover:text-white p-1"
+                  aria-label="إغلاق الدليل"
+                  className="text-slate-400 hover:text-white p-1.5 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
-                  ✕
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 
@@ -748,7 +794,7 @@ export const MikrotikLoginView: React.FC<MikrotikLoginViewProps> = ({ onSuccessN
               <button
                 type="button"
                 onClick={() => setShowRemoteGuide(false)}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-lg text-xs transition-all cursor-pointer"
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-lg text-xs transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 إغلاق
               </button>

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { appLogger } from './rotatingLogger.ts';
 import type {
   VoucherItem,
   BatchInfo,
@@ -20,7 +21,7 @@ interface SqliteDatabase {
 }
 
 /**
- * Built-in Synchronous ACID Fallback Engine for Electron 34 (Node 20) or Node < 22.5
+ * Built-in Synchronous ACID Fallback Engine for Node < 22.13
  * where `node:sqlite` is not built into the binary.
  */
 export class FallbackSqliteDatabase implements SqliteDatabase {
@@ -31,6 +32,8 @@ export class FallbackSqliteDatabase implements SqliteDatabase {
   private templates = new Map<string, Record<string, any>>();
   private kvStore = new Map<string, Record<string, any>>();
   private inTransaction = false;
+  private dirty = false;
+  private saveTimer: NodeJS.Timeout | null = null;
 
   constructor(sqliteFilePath: string) {
     this.legacyPath = sqliteFilePath;
@@ -65,7 +68,32 @@ export class FallbackSqliteDatabase implements SqliteDatabase {
           }
         }
       }
-    } catch {}
+    } catch (loadErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed reading fallback JSON store from disk', {
+        error: loadErr instanceof Error ? loadErr.message : String(loadErr)
+      });
+    }
+  }
+
+  private scheduleSave(): void {
+    if (this.inTransaction) return;
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.flush();
+    }, 1500);
+    this.saveTimer.unref?.();
+  }
+
+  public flush(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.dirty) return;
+    this.dirty = false;
+    this.saveToDisk();
   }
 
   private saveToDisk(): void {
@@ -77,30 +105,41 @@ export class FallbackSqliteDatabase implements SqliteDatabase {
         templates: Array.from(this.templates.values()),
         kvStore: Array.from(this.kvStore.values())
       });
-      const tmp = `${this.filePath}.tmp`;
-      fs.writeFileSync(tmp, payload, 'utf-8');
+      const tmp = `${this.filePath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, payload, { encoding: 'utf-8', mode: 0o600 });
       fs.renameSync(tmp, this.filePath);
-    } catch {}
+    } catch (saveErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed persisting fallback JSON store to disk', {
+        error: saveErr instanceof Error ? saveErr.message : String(saveErr)
+      });
+    }
   }
 
   public exec(sql: string): void {
     const upper = sql.trim().toUpperCase();
     if (upper.startsWith('BEGIN')) {
+      if (this.dirty) this.flush();
       this.inTransaction = true;
     } else if (upper.startsWith('COMMIT')) {
       this.inTransaction = false;
-      this.saveToDisk();
+      this.dirty = true;
+      this.flush();
     } else if (upper.startsWith('ROLLBACK')) {
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      this.dirty = false;
       this.inTransaction = false;
       this.loadFromDisk();
     } else if (upper.includes('WAL_CHECKPOINT') || upper.includes('VACUUM')) {
-      this.saveToDisk();
+      this.flush();
     }
   }
 
   public close(): void {
     this.inTransaction = false;
-    this.saveToDisk();
+    this.flush();
   }
 
   public prepare(sql: string): SqliteStatement {
@@ -180,7 +219,7 @@ export class FallbackSqliteDatabase implements SqliteDatabase {
           }
           changes = 1;
         }
-        this.saveToDisk();
+        this.scheduleSave();
         return { changes, lastInsertRowid: 0 };
       },
       get: (...params: any[]) => {
@@ -390,7 +429,11 @@ function openSqliteOrFallback(sqliteFile: string, forceFallback = false): { db: 
       if (mod && typeof mod.DatabaseSync === 'function') {
         return { db: new mod.DatabaseSync(sqliteFile) as unknown as SqliteDatabase, isFallback: false };
       }
-    } catch {}
+    } catch (sqliteErr: unknown) {
+      appLogger.warn('VoucherDB', 'node:sqlite unavailable, using FallbackSqliteDatabase', {
+        error: sqliteErr instanceof Error ? sqliteErr.message : String(sqliteErr)
+      });
+    }
   }
   return { db: new FallbackSqliteDatabase(sqliteFile), isFallback: true };
 }
@@ -413,7 +456,12 @@ export class VoucherDatabase {
     if (!fs.existsSync(this.dataDir)) {
       try {
         fs.mkdirSync(this.dataDir, { recursive: true });
-      } catch {}
+      } catch (mkdirErr: unknown) {
+        appLogger.warn('VoucherDB', 'Failed creating voucher data directory', {
+          dataDir: this.dataDir,
+          error: mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr)
+        });
+      }
     }
 
     const forceFallback = Boolean(options?.forceFallback);
@@ -581,7 +629,11 @@ export class VoucherDatabase {
               migratedAny = true;
             }
           }
-        } catch {}
+        } catch (tplErr: unknown) {
+          appLogger.warn('VoucherDB', 'Legacy templates migration warning', {
+            error: tplErr instanceof Error ? tplErr.message : String(tplErr)
+          });
+        }
       }
 
       // 4. Current Design JSON
@@ -594,7 +646,11 @@ export class VoucherDatabase {
               .run('current_design', designRaw);
             migratedAny = true;
           }
-        } catch {}
+        } catch (desErr: unknown) {
+          appLogger.warn('VoucherDB', 'Legacy current_design migration warning', {
+            error: desErr instanceof Error ? desErr.message : String(desErr)
+          });
+        }
       }
 
       this.db.exec('COMMIT;');
@@ -604,7 +660,11 @@ export class VoucherDatabase {
     } catch (err) {
       try {
         this.db.exec('ROLLBACK;');
-      } catch {}
+      } catch (rbErr: unknown) {
+        appLogger.warn('VoucherDB', 'Migration rollback warning', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr)
+        });
+      }
       console.error('[VoucherDB] Legacy JSON migration failed:', err);
     }
   }
@@ -667,7 +727,11 @@ export class VoucherDatabase {
         parsed.profileName = String(row.profile_name || parsed.profileName || 'default');
         parsed.statusCd = (row.status_cd || parsed.statusCd || 'ACTIVE') as VoucherStatus;
         return parsed;
-      } catch {}
+      } catch (parseErr: unknown) {
+        appLogger.warn('VoucherDB', 'Corrupt voucher raw_json fell back to column mapping', {
+          error: parseErr instanceof Error ? parseErr.message : String(parseErr)
+        });
+      }
     }
     return {
       voucherId: String(row.voucher_id),
@@ -693,13 +757,24 @@ export class VoucherDatabase {
     // Native SQLite WAL commits directly to disk; no deferred memory export required
   }
 
+  public clearMemoryCache(): void {
+    this.cachedPriceMap = null;
+  }
+
   public flushToDiskSync(): void {
     try {
+      if (typeof (this.db as any).flush === 'function') {
+        (this.db as any).flush();
+      }
       this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
       if (!this.isFallbackEngine && fs.existsSync(this.sqliteFile)) {
         fs.copyFileSync(this.sqliteFile, this.sqliteBackupFile);
       }
-    } catch {}
+    } catch (flushErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed flushing WAL checkpoint or backup copy', {
+        error: flushErr instanceof Error ? flushErr.message : String(flushErr)
+      });
+    }
   }
 
   public async flushToDisk(): Promise<void> {
@@ -710,7 +785,11 @@ export class VoucherDatabase {
     try {
       this.flushToDiskSync();
       this.db.close();
-    } catch {}
+    } catch (closeErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed closing database cleanly', {
+        error: closeErr instanceof Error ? closeErr.message : String(closeErr)
+      });
+    }
   }
 
   public getPriceMap(): Record<string, {
@@ -835,7 +914,11 @@ export class VoucherDatabase {
     } catch (err) {
       try {
         this.db.exec('ROLLBACK;');
-      } catch {}
+      } catch (rbErr: unknown) {
+        appLogger.warn('VoucherDB', 'Batch insert rollback warning', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr)
+        });
+      }
       throw err;
     }
 
@@ -1029,7 +1112,11 @@ export class VoucherDatabase {
     } catch (err) {
       try {
         this.db.exec('ROLLBACK;');
-      } catch {}
+      } catch (rbErr: unknown) {
+        appLogger.warn('VoucherDB', 'markVouchersSynced rollback warning', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr)
+        });
+      }
       throw err;
     }
 
@@ -1068,7 +1155,11 @@ export class VoucherDatabase {
     } catch (err) {
       try {
         this.db.exec('ROLLBACK;');
-      } catch {}
+      } catch (rbErr: unknown) {
+        appLogger.warn('VoucherDB', 'deleteBatch rollback warning', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr)
+        });
+      }
       throw err;
     }
 
@@ -1076,7 +1167,12 @@ export class VoucherDatabase {
     try {
       const legacyFile = path.join(this.dataDir, 'batches', `${batchId}.json`);
       if (fs.existsSync(legacyFile)) fs.unlinkSync(legacyFile);
-    } catch {}
+    } catch (rmErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed cleaning legacy batch JSON file', {
+        batchId,
+        error: rmErr instanceof Error ? rmErr.message : String(rmErr)
+      });
+    }
 
     this.cachedPriceMap = null;
     return deletedCount;
@@ -1165,7 +1261,11 @@ export class VoucherDatabase {
       if (fs.existsSync(targetFile)) {
         size = fs.statSync(targetFile).size;
       }
-    } catch {}
+    } catch (statErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed inspecting database file size', {
+        error: statErr instanceof Error ? statErr.message : String(statErr)
+      });
+    }
 
     return {
       totalVouchers: Number(r.total) || 0,
@@ -1185,7 +1285,11 @@ export class VoucherDatabase {
     let before = 0;
     try {
       if (fs.existsSync(targetFile)) before = fs.statSync(targetFile).size;
-    } catch {}
+    } catch (statErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed inspecting pre-vacuum size', {
+        error: statErr instanceof Error ? statErr.message : String(statErr)
+      });
+    }
 
     this.db.exec('VACUUM;');
     this.flushToDiskSync();
@@ -1193,7 +1297,11 @@ export class VoucherDatabase {
     let after = 0;
     try {
       if (fs.existsSync(targetFile)) after = fs.statSync(targetFile).size;
-    } catch {}
+    } catch (statErr: unknown) {
+      appLogger.warn('VoucherDB', 'Failed inspecting post-vacuum size', {
+        error: statErr instanceof Error ? statErr.message : String(statErr)
+      });
+    }
 
     return {
       beforeSizeBytes: before,
@@ -1211,7 +1319,11 @@ export class VoucherDatabase {
     for (const r of rows) {
       try {
         result.push(JSON.parse(String(r.data_json)));
-      } catch {}
+      } catch (parseErr: unknown) {
+        appLogger.warn('VoucherDB', 'Skipping corrupt template JSON row', {
+          error: parseErr instanceof Error ? parseErr.message : String(parseErr)
+        });
+      }
     }
     return result;
   }
@@ -1329,7 +1441,12 @@ export class VoucherDatabase {
             };
           }
         }
-      } catch {}
+      } catch (metaErr: unknown) {
+        appLogger.warn('VoucherDB', 'Failed reading profile metadata row', {
+          key,
+          error: metaErr instanceof Error ? metaErr.message : String(metaErr)
+        });
+      }
     }
     return null;
   }
@@ -1514,7 +1631,11 @@ export class VoucherDatabase {
     } catch (err) {
       try {
         this.db.exec('ROLLBACK;');
-      } catch {}
+      } catch (rbErr: unknown) {
+        appLogger.warn('VoucherDB', 'importSnapshot rollback warning', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr)
+        });
+      }
       throw err;
     }
 

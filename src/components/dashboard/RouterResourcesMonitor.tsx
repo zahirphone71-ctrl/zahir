@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useMikroTik } from '../../context/MikroTikContext';
+import { useConnectionSession, useRouterTelemetry, useMikroTikActions } from '../../context/MikroTikContext';
 import { formatBytes } from '../../lib/formatters';
 import {
   Cpu,
@@ -28,17 +28,9 @@ interface ResourceDataPoint {
 }
 
 export const RouterResourcesMonitor: React.FC = () => {
-  const {
-    router,
-    isConnected,
-    lastSyncTime,
-    ecoMode,
-    setEcoMode,
-    thermalShieldActive,
-    syncNow,
-    runCommand,
-    showToast
-  } = useMikroTik();
+  const { isConnected } = useConnectionSession();
+  const { router, lastSyncTime, ecoMode, thermalShieldActive } = useRouterTelemetry();
+  const { setEcoMode, syncNow, runCommand, showToast } = useMikroTikActions();
 
   const [chartMode, setChartMode] = useState<ResourceChartMode>('combined');
   const [isFlushingDns, setIsFlushingDns] = useState(false);

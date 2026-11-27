@@ -6,6 +6,9 @@ import { processInChunks } from '../../lib/scheduler';
 
 const QR_CACHE = new LRUCache<string, string>(500);
 
+/**
+ * Generates crisp vector SVG QR codes (lightweight, print-sharp at any DPI, Node/Browser safe)
+ */
 export async function preGenerateQrCodes(
   vouchers: VoucherItem[],
   loginUrl: string,
@@ -22,7 +25,7 @@ export async function preGenerateQrCodes(
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       if (!v.voucherCode) return;
 
-      const cacheKey = `${v.voucherCode}|${v.voucherPin || ''}|${loginUrl}|${authMode}|${qrSize}`;
+      const cacheKey = `svg|${v.voucherCode}|${v.voucherPin || ''}|${loginUrl}|${authMode}`;
       const cached = QR_CACHE.get(cacheKey);
 
       if (cached) {
@@ -30,16 +33,16 @@ export async function preGenerateQrCodes(
       } else {
         try {
           const url = buildAutoLoginQrUrl(loginUrl, v.voucherCode, v.voucherPin, authMode);
-          const dataUrl = await QRCode.toDataURL(url, {
-            width: qrSize,
+          const svg = await QRCode.toString(url, {
+            type: 'svg',
             margin: 1,
-            errorCorrectionLevel: 'L',
+            errorCorrectionLevel: 'M',
             color: { dark: '#000000', light: '#ffffff' },
           });
-          QR_CACHE.set(cacheKey, dataUrl);
-          result.set(v.voucherCode, dataUrl);
+          QR_CACHE.set(cacheKey, svg);
+          result.set(v.voucherCode, svg);
         } catch {
-          result.set(v.voucherCode, generateFallbackImage(qrSize));
+          result.set(v.voucherCode, generateFallbackSvg(qrSize));
         }
       }
     },
@@ -49,23 +52,9 @@ export async function preGenerateQrCodes(
   return result;
 }
 
-function generateFallbackImage(size: number): string {
-  if (typeof document === 'undefined') return '';
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return '';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = `${Math.max(8, size / 6)}px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('QR', size / 2, size / 2);
-  const out = canvas.toDataURL('image/png');
-  canvas.width = canvas.height = 1;
-  return out;
+function generateFallbackSvg(size: number): string {
+  const s = Math.max(16, Math.round(size || 36));
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${s}" width="${s}" height="${s}"><rect width="100%" height="100%" fill="#ffffff"/><rect x="2" y="2" width="${s - 4}" height="${s - 4}" fill="none" stroke="#94a3b8" stroke-width="1"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-family="monospace" font-size="${Math.max(6, Math.round(s / 4))}">QR</text></svg>`;
 }
 
 export function clearQrCache(): void {

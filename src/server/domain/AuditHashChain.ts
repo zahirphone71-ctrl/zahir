@@ -29,7 +29,7 @@ export class AuditHashChain {
   }): AuditLogEvent {
     this.sequenceCounter += 1;
     const now = Date.now();
-    const eventId = `audit_${now}_${Math.random().toString(36).substring(2, 9)}`;
+    const eventId = `audit_${now}_${crypto.randomBytes(5).toString('hex')}`;
 
     // Redact any sensitive passwords or tokens from changes
     const redactedChanges = params.changes ? this.redactSecrets(params.changes) : undefined;

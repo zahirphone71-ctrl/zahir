@@ -20,6 +20,7 @@ import {
 import { VoucherItem } from './types';
 import { secureFetch, safeParseJson } from '../../lib/api';
 import { printHtmlSafely } from '../../lib/printHelper';
+import { escapeHtml } from './voucherRenderCore';
 
 interface CustomVoucherModalProps {
   isOpen: boolean;
@@ -133,16 +134,36 @@ export const CustomVoucherModal: React.FC<CustomVoucherModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Generate random quick code
+  // Generate cryptographically secure random quick code using rejection sampling
   const handleGenerateRandomCode = () => {
     const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const maxValid = Math.floor(256 / chars.length) * chars.length;
     let result = '';
-    for (let i = 0; i < 6; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    const byteBuf = new Uint8Array(32);
+    while (result.length < 6) {
+      crypto.getRandomValues(byteBuf);
+      for (let i = 0; i < byteBuf.length && result.length < 6; i++) {
+        if (byteBuf[i] < maxValid) {
+          result += chars.charAt(byteBuf[i] % chars.length);
+        }
+      }
     }
     setCode(result);
     if (authMode === 'user_pass' && !pin) {
-      setPin(Math.floor(1000 + Math.random() * 9000).toString());
+      const range = 9000;
+      const maxPinValid = Math.floor(65536 / range) * range;
+      const pinBuf = new Uint16Array(8);
+      let randomPin = 0;
+      while (!randomPin) {
+        crypto.getRandomValues(pinBuf);
+        for (let i = 0; i < pinBuf.length; i++) {
+          if (pinBuf[i] < maxPinValid) {
+            randomPin = 1000 + (pinBuf[i] % range);
+            break;
+          }
+        }
+      }
+      setPin(String(randomPin));
     }
   };
 
@@ -244,16 +265,23 @@ ${generatedVoucher.voucherPin ? `كلمة المرور: ${generatedVoucher.vouch
   const handlePrintSingle = async () => {
     if (!generatedVoucher) return;
 
+    const safeCode = escapeHtml(generatedVoucher.voucherCode);
+    const safePin = escapeHtml(generatedVoucher.voucherPin);
+    const safeProfile = escapeHtml(generatedVoucher.profileName);
+    const safeTime = escapeHtml(generatedVoucher.timeLimit || 'مفتوح');
+    const safeData = escapeHtml(generatedVoucher.dataLimit || 'مفتوح');
+    const safePrice = escapeHtml(generatedVoucher.price);
+    const safeCurrency = escapeHtml(currencySymbol);
+
     const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
         <head>
           <meta charset="utf-8" />
-          <title>طباعة كرت مخصص - ${generatedVoucher.voucherCode}</title>
+          <title>طباعة كرت مخصص - ${safeCode}</title>
           <style>
-            @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&family=JetBrains+Mono:wght@700&display=swap');
             body {
-              font-family: 'Tajawal', sans-serif;
+              font-family: 'Tajawal', 'Cairo', 'Segoe UI', Tahoma, sans-serif;
               margin: 0;
               padding: 20px;
               background: #f8fafc;
@@ -292,7 +320,7 @@ ${generatedVoucher.voucherPin ? `كلمة المرور: ${generatedVoucher.vouch
               border: 1px dashed #64748b;
               border-radius: 8px;
               padding: 6px 12px;
-              font-family: 'JetBrains Mono', monospace;
+              font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
               font-size: 20px;
               font-weight: 900;
               letter-spacing: 2px;
@@ -300,7 +328,7 @@ ${generatedVoucher.voucherPin ? `كلمة المرور: ${generatedVoucher.vouch
               display: inline-block;
             }
             .pin-box {
-              font-family: 'JetBrains Mono', monospace;
+              font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
               font-size: 14px;
               color: #cbd5e1;
               margin-top: 4px;
@@ -323,20 +351,20 @@ ${generatedVoucher.voucherPin ? `كلمة المرور: ${generatedVoucher.vouch
           <div class="voucher-card">
             <div class="header">
               <div class="title">كرت إنترنت مخصص</div>
-              <div class="price">${generatedVoucher.price} ${currencySymbol}</div>
+              <div class="price">${safePrice} ${safeCurrency}</div>
             </div>
             <div class="content">
-              <div class="code-box">${generatedVoucher.voucherCode}</div>
+              <div class="code-box">${safeCode}</div>
               ${authMode === 'user_equals_pass' && generatedVoucher.voucherPin
-                ? `<div class="pin-box">كلمة المرور: <strong style="color:#60a5fa;">${generatedVoucher.voucherPin}</strong> <span style="font-size:11px; color:#34d399;">(مطابقة لاسم المستخدم)</span></div>`
+                ? `<div class="pin-box">كلمة المرور: <strong style="color:#60a5fa;">${safePin}</strong> <span style="font-size:11px; color:#34d399;">(مطابقة لاسم المستخدم)</span></div>`
                 : (generatedVoucher.voucherPin && generatedVoucher.voucherPin !== generatedVoucher.voucherCode
-                    ? `<div class="pin-box">كلمة المرور: ${generatedVoucher.voucherPin}</div>`
+                    ? `<div class="pin-box">كلمة المرور: ${safePin}</div>`
                     : '')}
             </div>
             <div class="footer">
-              <div>البروفايل: ${generatedVoucher.profileName}</div>
-              <div>الوقت: ${generatedVoucher.timeLimit || 'مفتوح'}</div>
-              <div>البيانات: ${generatedVoucher.dataLimit || 'مفتوح'}</div>
+              <div>البروفايل: ${safeProfile}</div>
+              <div>الوقت: ${safeTime}</div>
+              <div>البيانات: ${safeData}</div>
             </div>
           </div>
           <script>

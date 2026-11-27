@@ -2091,7 +2091,7 @@ export const PortalStudioModal: React.FC<PortalStudioModalProps> = ({
                         title="Uploaded Portal Page"
                         srcDoc={substituteRouterPreviewVars(uploadedPreviewHtml)}
                         className="w-full h-full min-h-[540px] border-0 bg-white"
-                        sandbox="allow-scripts allow-forms allow-same-origin"
+                        sandbox="allow-scripts allow-forms"
                       />
                     ) : (
                       <div className="flex-1 min-h-[500px] flex flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
@@ -2109,7 +2109,7 @@ export const PortalStudioModal: React.FC<PortalStudioModalProps> = ({
                       title="Published Router Page"
                       srcDoc={substituteRouterPreviewVars(routerPublishedHtml)}
                       className="w-full h-full min-h-[540px] border-0 bg-white"
-                      sandbox="allow-scripts allow-forms allow-same-origin"
+                      sandbox="allow-scripts allow-forms"
                     />
                   ) : (
                     <div className="flex-1 min-h-[500px] flex flex-col items-center justify-center gap-3 p-6 text-center">

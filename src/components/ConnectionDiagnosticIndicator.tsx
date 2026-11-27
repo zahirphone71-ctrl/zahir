@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useMikroTik } from '../context/MikroTikContext';
+import { useConnectionSession, useRouterTelemetry, useMikroTikActions } from '../context/MikroTikContext';
 import { Activity, AlertTriangle, CheckCircle2, ShieldAlert, RefreshCw, X, Clock, Wifi, WifiOff } from 'lucide-react';
 
 export interface DiagnosticLogEvent {
@@ -11,15 +11,13 @@ export interface DiagnosticLogEvent {
 
 export const ConnectionDiagnosticIndicator: React.FC = () => {
   const {
+    routerIdentity,
     isConnected,
-    isRealtimeWsConnected,
     isSilentReconnecting,
-    reconnectAttempts,
-    lastSyncTime,
-    router,
-    syncNow,
-    showToast
-  } = useMikroTik();
+    reconnectAttempts
+  } = useConnectionSession();
+  const { isRealtimeWsConnected, lastSyncTime } = useRouterTelemetry();
+  const { syncNow, showToast } = useMikroTikActions();
 
   const [hasHeartbeatTimeout, setHasHeartbeatTimeout] = useState<boolean>(false);
   const [packetLossCount, setPacketLossCount] = useState<number>(0);
@@ -62,7 +60,7 @@ export const ConnectionDiagnosticIndicator: React.FC = () => {
         id: `log-${Date.now()}`,
         timestamp: new Date().toLocaleTimeString('ar-SA'),
         type: 'connected',
-        message: `تم الاتصال بنجاح بالراوتر (${router?.name || router?.host || 'MikroTik'})`
+        message: `تم الاتصال بنجاح بالراوتر (${routerIdentity?.name || routerIdentity?.host || 'MikroTik'})`
       };
       setLogs(prev => [newEvt, ...prev.slice(0, 49)]);
       lastPacketReceivedAtRef.current = Date.now();
@@ -107,7 +105,7 @@ export const ConnectionDiagnosticIndicator: React.FC = () => {
     }, 8000);
 
     return () => clearInterval(checkInterval);
-  }, [isConnected, lastSyncTime, router?.name, router?.host]);
+  }, [isConnected, lastSyncTime, routerIdentity?.name, routerIdentity?.host]);
 
   // Update last packet timestamp when lastSyncTime changes
   useEffect(() => {
@@ -155,9 +153,7 @@ export const ConnectionDiagnosticIndicator: React.FC = () => {
             ? 'bg-amber-950/90 border-amber-500/70 text-amber-200'
             : hasHeartbeatTimeout
             ? 'bg-rose-950/80 border-rose-500/60 text-rose-200'
-            : isRealtimeWsConnected
-            ? 'bg-emerald-950/55 border-emerald-500/40 text-emerald-200 hover:bg-emerald-900/60'
-            : 'bg-amber-950/60 border-amber-500/40 text-amber-200 hover:bg-amber-900/60'
+            : 'bg-emerald-950/55 border-emerald-500/40 text-emerald-200 hover:bg-emerald-900/60'
         }`}
         title="اضغط لعرض تشخيص الاتصال ونبضات الـ Heartbeat وحزم المايكروتك"
       >
@@ -167,9 +163,7 @@ export const ConnectionDiagnosticIndicator: React.FC = () => {
               ? 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]'
               : hasHeartbeatTimeout
               ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]'
-              : isRealtimeWsConnected
-              ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
-              : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]'
+              : 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
           }`}></span>
         </span>
 
@@ -185,15 +179,10 @@ export const ConnectionDiagnosticIndicator: React.FC = () => {
               <span className="hidden sm:inline font-bold">مهلة نبضات الاتصال (Timeout)</span>
               {packetLossCount > 0 && <span className="px-1.5 py-0.2 bg-rose-500/30 text-rose-200 rounded-full text-[10px]">{packetLossCount}</span>}
             </>
-          ) : isRealtimeWsConnected ? (
+          ) : (
             <>
               <Wifi className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span className="hidden sm:inline">اتصال حي مستقر (Live)</span>
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="hidden sm:inline">استطلاع ذكي نشط</span>
             </>
           )}
         </div>

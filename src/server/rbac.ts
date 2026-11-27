@@ -11,8 +11,13 @@ import fs from 'fs';
 import path from 'path';
 import type { Request, Response, NextFunction } from 'express';
 import { AuditHashChain } from './domain/AuditHashChain.ts';
+import { writeJsonAtomic } from './tlsPinStore.ts';
 
 export type OperatorRole = 'admin' | 'cashier' | 'viewer';
+
+export const MIN_OPERATOR_PASSWORD_LENGTH = 10;
+export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+export const ACCOUNT_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 export interface OperatorRecord {
   id: string;
@@ -23,6 +28,8 @@ export interface OperatorRecord {
   disabled: boolean;
   createdAt: string;
   lastLoginAt?: string;
+  failedAttempts?: number;
+  lockedUntil?: number;
 }
 
 export interface SafeOperatorView {
@@ -33,12 +40,19 @@ export interface SafeOperatorView {
   disabled: boolean;
   createdAt: string;
   lastLoginAt?: string;
+  lockedUntil?: number;
 }
 
 export interface SessionRoleContext {
   role: OperatorRole;
   operatorId: string;
   operatorName: string;
+}
+
+export interface OperatorAuthAttemptResult {
+  operator: SafeOperatorView | null;
+  locked: boolean;
+  remainingLockSeconds?: number;
 }
 
 const VALID_ROLES: OperatorRole[] = ['admin', 'cashier', 'viewer'];
@@ -76,7 +90,9 @@ export class RbacService {
     if (!fs.existsSync(dataDir)) {
       try {
         fs.mkdirSync(dataDir, { recursive: true });
-      } catch {}
+      } catch (err: any) {
+        console.warn('[RBAC] Failed to create data directory:', err?.message || err);
+      }
     }
     this.operatorsFile = path.join(dataDir, 'operators.json');
     this.load();
@@ -102,16 +118,14 @@ export class RbacService {
 
   private save() {
     try {
-      const tmpFile = `${this.operatorsFile}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify(this.operators, null, 2), { mode: 0o600, encoding: 'utf-8' });
-      fs.renameSync(tmpFile, this.operatorsFile);
+      writeJsonAtomic(this.operatorsFile, this.operators);
     } catch (e) {
       console.error('[RBAC] Failed to save operators file:', e);
     }
   }
 
   public listOperators(): SafeOperatorView[] {
-    return this.operators.map(({ passwordHash: _ignored, ...safe }) => safe);
+    return this.operators.map(({ passwordHash: _ignored, failedAttempts: _fa, ...safe }) => safe);
   }
 
   public hasCustomOperators(): boolean {
@@ -128,8 +142,8 @@ export class RbacService {
     if (!username || username.length < 2 || username.length > 48 || !/^[a-zA-Z0-9._-]+$/.test(username)) {
       throw new Error('اسم المشغل غير صالح (حروف وأرقام و ._- فقط، بحد أدنى حرفين)');
     }
-    if (!input.password || String(input.password).length < 4) {
-      throw new Error('كلمة مرور المشغل يجب أن تكون 4 أحرف على الأقل');
+    if (!input.password || String(input.password).length < MIN_OPERATOR_PASSWORD_LENGTH) {
+      throw new Error(`كلمة مرور المشغل يجب أن تكون ${MIN_OPERATOR_PASSWORD_LENGTH} أحرف على الأقل`);
     }
     if (!isValidRole(input.role)) {
       throw new Error('الدور غير صالح (admin / cashier / viewer)');
@@ -145,18 +159,19 @@ export class RbacService {
       role: input.role,
       passwordHash: hashPassword(String(input.password)),
       disabled: false,
+      failedAttempts: 0,
       createdAt: new Date().toISOString()
     };
 
     this.operators.push(record);
     this.save();
-    const { passwordHash: _ignored, ...safe } = record;
+    const { passwordHash: _ignored, failedAttempts: _fa, ...safe } = record;
     return safe;
   }
 
   public updateOperator(
     id: string,
-    updates: { role?: OperatorRole; displayName?: string; password?: string; disabled?: boolean }
+    updates: { role?: OperatorRole; displayName?: string; password?: string; disabled?: boolean; unlock?: boolean }
   ): SafeOperatorView {
     const idx = this.operators.findIndex((o) => o.id === id);
     if (idx === -1) {
@@ -173,11 +188,18 @@ export class RbacService {
     if (updates.disabled !== undefined) {
       op.disabled = Boolean(updates.disabled);
     }
-    if (updates.password && String(updates.password).trim().length >= 4) {
+    if (updates.unlock) {
+      op.failedAttempts = 0;
+      delete op.lockedUntil;
+    }
+    if (updates.password !== undefined && String(updates.password).trim().length > 0) {
+      if (String(updates.password).length < MIN_OPERATOR_PASSWORD_LENGTH) {
+        throw new Error(`كلمة مرور المشغل يجب أن تكون ${MIN_OPERATOR_PASSWORD_LENGTH} أحرف على الأقل`);
+      }
       op.passwordHash = hashPassword(String(updates.password));
     }
     this.save();
-    const { passwordHash: _ignored, ...safe } = op;
+    const { passwordHash: _ignored, failedAttempts: _fa, ...safe } = op;
     return safe;
   }
 
@@ -191,15 +213,48 @@ export class RbacService {
     return false;
   }
 
-  public authenticateOperator(username: string, password: string): SafeOperatorView | null {
+  public authenticateOperatorDetailed(username: string, password: string): OperatorAuthAttemptResult {
     const cleanUser = String(username || '').trim().toLowerCase();
     const op = this.operators.find((o) => o.username.toLowerCase() === cleanUser);
-    if (!op || op.disabled) return null;
-    if (!verifyPassword(password, op.passwordHash)) return null;
+    if (!op || op.disabled) {
+      return { operator: null, locked: false };
+    }
+
+    const now = Date.now();
+    if (op.lockedUntil && now < op.lockedUntil) {
+      const remainingLockSeconds = Math.max(1, Math.ceil((op.lockedUntil - now) / 1000));
+      return { operator: null, locked: true, remainingLockSeconds };
+    }
+
+    // Lock expired -> reset counter
+    if (op.lockedUntil && now >= op.lockedUntil) {
+      op.failedAttempts = 0;
+      delete op.lockedUntil;
+    }
+
+    if (!verifyPassword(password, op.passwordHash)) {
+      op.failedAttempts = (op.failedAttempts || 0) + 1;
+      let locked = false;
+      let remainingLockSeconds: number | undefined;
+      if (op.failedAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+        op.lockedUntil = now + ACCOUNT_LOCKOUT_MS;
+        locked = true;
+        remainingLockSeconds = Math.ceil(ACCOUNT_LOCKOUT_MS / 1000);
+      }
+      this.save();
+      return { operator: null, locked, remainingLockSeconds };
+    }
+
+    op.failedAttempts = 0;
+    delete op.lockedUntil;
     op.lastLoginAt = new Date().toISOString();
     this.save();
-    const { passwordHash: _ignored, ...safe } = op;
-    return safe;
+    const { passwordHash: _ignored, failedAttempts: _fa, ...safe } = op;
+    return { operator: safe, locked: false };
+  }
+
+  public authenticateOperator(username: string, password: string): SafeOperatorView | null {
+    return this.authenticateOperatorDetailed(username, password).operator;
   }
 }
 
@@ -240,7 +295,6 @@ export function isAuthorizedForRequest(role: OperatorRole, method: string, pathU
   const normalizedMethod = method.toUpperCase();
   const cleanPath = pathUrl.split('?')[0];
 
-  // Operator management & security settings are strictly admin-only even for GET
   if (cleanPath.startsWith('/api/auth/operators') || cleanPath.startsWith('/api/security/settings')) {
     return { allowed: false, reason: 'هذا القسم مخصص للمدير العام (Admin) فقط.' };
   }
@@ -259,7 +313,6 @@ export function isAuthorizedForRequest(role: OperatorRole, method: string, pathU
     };
   }
 
-  // role === 'cashier'
   if (
     CASHIER_ALLOWED_MUTATION_PREFIXES.some((p) => cleanPath === p || cleanPath.startsWith(p + '/')) ||
     /^\/api\/vouchers\/batches\/[^/]+\/resume$/.test(cleanPath)
@@ -311,7 +364,7 @@ export function createRbacMiddleware(
     if (!pathUrl.startsWith('/api/')) return next();
 
     const sessionRole = getSessionRole(req);
-    if (!sessionRole) return next(); // Unauthenticated routes handled by session middleware
+    if (!sessionRole) return next();
 
     (req as any).sessionRole = sessionRole;
     const auth = isAuthorizedForRequest(sessionRole.role, req.method, pathUrl);

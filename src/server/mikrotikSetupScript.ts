@@ -1,3 +1,8 @@
+import {
+  sanitizeRouterOsIdentifier,
+  sanitizeRouterOsQuotedValue
+} from './utils/routerNormalizers.ts';
+
 export interface SetupConfig {
   wanInterface: string;
   lanBridge: string;
@@ -5,20 +10,25 @@ export interface SetupConfig {
   wanIp: string;
   gateway: string;
   radiusSecret: string;
+  webPrivateUsername?: string;
   timeZone: string;
 }
 
 export const generateSetupScript = (config: Partial<SetupConfig>) => {
-  const wanIface = (config.wanInterface || 'ether1').trim();
-  const lanBridge = (config.lanBridge || 'bridge1').trim();
-  const ssid = (config.ssid || 'Al-afia -Net').trim();
-  let wanIp = (config.wanIp || '192.168.1.20/24').trim();
+  const wanIface = sanitizeRouterOsIdentifier(config.wanInterface, 'ether1');
+  const lanBridge = sanitizeRouterOsIdentifier(config.lanBridge, 'bridge1');
+  const ssid = sanitizeRouterOsQuotedValue(config.ssid, 'Al-afia -Net');
+  let wanIp = sanitizeRouterOsIdentifier(config.wanIp, '192.168.1.20/24');
   if (!wanIp.includes('/')) {
     wanIp = `${wanIp}/24`;
   }
-  const gateway = (config.gateway || '192.168.1.1').trim();
-  const radiusSecret = (config.radiusSecret || '2026').trim();
-  const timeZone = (config.timeZone || 'Asia/Riyadh').trim();
+  const gateway = sanitizeRouterOsIdentifier(config.gateway, '192.168.1.1');
+  const radiusSecret = sanitizeRouterOsQuotedValue(config.radiusSecret, '');
+  if (!radiusSecret) {
+    throw new Error('يجب تحديد كلمة سر الراديوس المشتركة قبل إنشاء السكربت');
+  }
+  const webPrivateUsername = sanitizeRouterOsIdentifier(config.webPrivateUsername, 'zctrl_admin');
+  const timeZone = sanitizeRouterOsIdentifier(config.timeZone, 'Asia/Riyadh');
 
   return `
 # ============================================================
@@ -125,7 +135,7 @@ export const generateSetupScript = (config: Partial<SetupConfig>) => {
 
 # 16. User-Manager Setup (Profiles, Limitations & Router)
 :do { /user-manager set enabled=yes use-profiles=yes } on-error={}
-:do { /user-manager advanced set web-private-password="${radiusSecret}" web-private-username=admin } on-error={}
+:do { /user-manager advanced set web-private-password="${radiusSecret}" web-private-username="${webPrivateUsername}" } on-error={}
 :do { /user-manager router add address=127.0.0.1 name=Local-Router shared-secret="${radiusSecret}" } on-error={}
 
 :do { /user-manager limitation add name=Lim-1H-Strict uptime-limit=1h } on-error={}

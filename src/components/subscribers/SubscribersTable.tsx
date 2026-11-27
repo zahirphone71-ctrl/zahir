@@ -145,10 +145,10 @@ export const SubscribersTable: React.FC<SubscribersTableProps> = ({
     };
   }, []);
 
-  // Auto-reset page on status filter change or items length change
+  // Auto-reset page only on explicit status filter or system tab change (never on live sync items.length change)
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [items.length, statusFilter]);
+  }, [statusFilter, system]);
 
   const effectivePageSize = pageSize === 'all' ? (items.length > 0 ? items.length : 1) : pageSize;
   const totalPages = Math.max(1, Math.ceil(items.length / effectivePageSize));

@@ -45,14 +45,18 @@ class SilentLogger {
   private persist() {
     try {
       safeStorage.setItem(STORAGE_KEY, JSON.stringify(this.logs.slice(-MAX_LOG_ENTRIES)));
-    } catch {}
+    } catch (err) {
+      console.warn('[ZCtrl Logger] Failed to persist log entries:', err);
+    }
   }
 
   private notify() {
     this.listeners.forEach((fn) => {
       try {
         fn(this.logs);
-      } catch {}
+      } catch (err) {
+        console.warn('[ZCtrl Logger] Listener callback failed:', err);
+      }
     });
   }
 
@@ -133,7 +137,7 @@ class SilentLogger {
     const { summary, suggestion } = this.translateToFriendlyArabic(err);
 
     const entry: LogEntry = {
-      id: `err-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: `err-${Date.now()}-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : this.logs.length}`,
       timestamp: new Date().toLocaleTimeString('ar-SA'),
       isoTime: new Date().toISOString(),
       level: 'error',
@@ -160,7 +164,7 @@ class SilentLogger {
 
   public warn(msg: string, context = 'App', metadata?: Record<string, any>) {
     const entry: LogEntry = {
-      id: `warn-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: `warn-${Date.now()}-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : this.logs.length}`,
       timestamp: new Date().toLocaleTimeString('ar-SA'),
       isoTime: new Date().toISOString(),
       level: 'warn',
@@ -182,7 +186,7 @@ class SilentLogger {
 
   public info(msg: string, context = 'App') {
     const entry: LogEntry = {
-      id: `info-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: `info-${Date.now()}-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : this.logs.length}`,
       timestamp: new Date().toLocaleTimeString('ar-SA'),
       isoTime: new Date().toISOString(),
       level: 'info',

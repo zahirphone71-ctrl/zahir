@@ -358,7 +358,8 @@ export function useNetworkPortalActions(deps: NetworkPortalActionsDeps) {
     try {
       const res = await fetchWithToken('/api/mikrotik/system/reboot', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmReboot: true })
       });
       const data = await res.json();
       if (res.ok && data.success) {

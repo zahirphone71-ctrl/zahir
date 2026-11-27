@@ -708,11 +708,10 @@ export function printViewData(reportData: ViewReportData, options: ExportPdfOpti
       <head>
         <meta charset="utf-8">
         <title>${escapePdfHtml(reportData.title)} - ZCtrl</title>
-        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
         <style>
           @page { size: ${isLandscape ? 'landscape' : 'portrait'}; margin: 12mm; }
           * { box-sizing: border-box; }
-          body { font-family: 'Cairo', system-ui, sans-serif; margin: 0; padding: 12px; color: #0f172a; direction: rtl; }
+          body { font-family: 'Cairo Variable', 'Cairo', system-ui, -apple-system, sans-serif; margin: 0; padding: 12px; color: #0f172a; direction: rtl; }
           table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
           tr { page-break-inside: avoid; page-break-after: auto; }
           th, td { border: 1px solid #cbd5e1; }

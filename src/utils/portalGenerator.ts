@@ -184,9 +184,6 @@ export function generateHotspotLoginHtml(inputConfig: HotspotPortalCustomization
   <meta http-equiv="pragma" content="no-cache">
   <meta http-equiv="expires" content="-1">
   <title>${config.networkName} - تسجيل الدخول</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
   <style>
     * {
       box-sizing: border-box;
@@ -941,7 +938,9 @@ export function generateHotspotLoginHtml(inputConfig: HotspotPortalCustomization
               if (barcodes && barcodes.length > 0) {
                 applyScannedCode(barcodes[0].rawValue);
               }
-            }).catch(function() {});
+            }).catch(function(err) {
+              if (window.console && console.warn) console.warn('QR scan frame skipped:', err);
+            });
           }
         }, 500);
       }
@@ -990,9 +989,6 @@ export function generateHotspotStatusHtml(inputConfig: HotspotPortalCustomizatio
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${config.networkName} - حالة الاتصال بالإنترنت</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@500;700;800;900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -1119,7 +1115,6 @@ export function generateHotspotLogoutHtml(inputConfig: HotspotPortalCustomizatio
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${config.networkName} - تم تسجيل الخروج</title>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@600;800;900&display=swap" rel="stylesheet">
   <style>
     body {
       font-family: 'Tajawal', sans-serif;

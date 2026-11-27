@@ -398,8 +398,10 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(design)
-        }).catch(() => {});
-      } catch {}
+        }).catch((err) => console.warn('Could not sync voucher design to server:', err));
+      } catch (err) {
+        console.warn('Could not initiate design sync:', err);
+      }
     }, 1500);
 
     return () => {
@@ -616,7 +618,9 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
         setLastBatchResult(batchInfo);
         try {
           safeStorage.setItem('zctrl_last_batch_info', JSON.stringify(batchInfo));
-        } catch {}
+        } catch (err) {
+          console.warn('Could not cache last batch info:', err);
+        }
 
         const allGenerated = (Array.isArray(data.vouchers) && data.vouchers.length > 0)
           ? data.vouchers
@@ -625,7 +629,9 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
           setGeneratedBatchVouchers(allGenerated);
           try {
             safeStorage.setItem('zctrl_last_batch_vouchers', JSON.stringify(allGenerated.slice(0, 50)));
-          } catch {}
+          } catch (err) {
+            console.warn('Could not cache last batch vouchers preview:', err);
+          }
         }
 
         showToast(`تم بنجاح توليد ${data.totalGenerated || design.quantity} كرت محلياً (${data.batchId}). يمكنك الآن مراجعتها أو حقنها بالمايكروتك من النافذة المنبثقة.`, "success");
@@ -762,7 +768,9 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
       safeStorage.setItem('zctrl_last_batch_info', JSON.stringify(resultObj));
       // Store only lightweight preview slice (24 items) to protect browser localStorage & RAM
       safeStorage.setItem('zctrl_last_batch_vouchers', JSON.stringify(vouchers.slice(0, 24)));
-    } catch {}
+    } catch (err) {
+      console.warn('Could not persist batch preview to storage:', err);
+    }
     setModalPage(1);
     setIsModalOpen(true);
   };
@@ -814,15 +822,16 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
   }, [gridInfo.cols, gridInfo.rows]);
 
   const currentLayout = useMemo(() => {
-    const found = LAYOUT_OPTIONS.find(l => l.cols === gridInfo.cols && l.rows === gridInfo.rows);
+    const found = LAYOUT_OPTIONS.find(l => l.cols === gridInfo.cols && l.rows === gridInfo.rows && Boolean(l.isPos) === Boolean(gridInfo.isPos));
     if (found) return found;
     return {
-      id: `custom_${gridInfo.cols}x${gridInfo.rows}`,
+      id: gridInfo.isPos ? 'pos80' : `custom_${gridInfo.cols}x${gridInfo.rows}`,
       label: `${gridInfo.cols} أعمدة × ${gridInfo.rows} صفوف (${gridInfo.totalPerPage} كرت/صفحة)`,
       cols: gridInfo.cols,
       rows: gridInfo.rows,
+      isPos: gridInfo.isPos,
     };
-  }, [gridInfo.cols, gridInfo.rows, gridInfo.totalPerPage]);
+  }, [gridInfo.cols, gridInfo.rows, gridInfo.totalPerPage, gridInfo.isPos]);
 
   const pageSize = gridInfo.totalPerPage;
   const totalPages = Math.max(1, Math.ceil(currentBatchVouchers.length / pageSize));
@@ -1132,14 +1141,24 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
         onPageChange={(p) => setModalPage(p)}
         layout={currentLayout}
         onLayoutChange={(newLayout) => {
-          setDesign(prev => ({
-            ...prev,
-            gridMode: "custom",
-            customCols: newLayout.cols,
-            customRows: newLayout.rows || prev.rowsCount || 7,
-            columnsCount: newLayout.cols,
-            rowsCount: newLayout.rows || prev.rowsCount || 7,
-          }));
+          setDesign(prev => {
+            const wasThermal = Boolean(prev.paperType?.includes('thermal') || prev.paperType?.startsWith('pos'));
+            let nextPaperType = prev.paperType;
+            if (newLayout.id === 'pos58') nextPaperType = 'thermal_58mm';
+            else if (newLayout.id === 'pos80' || newLayout.isPos) nextPaperType = 'thermal_80mm';
+            else if (newLayout.id === '10x10') nextPaperType = 'a4_100';
+            else if (wasThermal) nextPaperType = 'a4';
+
+            return {
+              ...prev,
+              paperType: nextPaperType,
+              gridMode: "custom",
+              customCols: newLayout.cols,
+              customRows: newLayout.rows || prev.rowsCount || 7,
+              columnsCount: newLayout.cols,
+              rowsCount: newLayout.rows || prev.rowsCount || 7,
+            };
+          });
         }}
         design={design}
         allVouchers={currentBatchVouchers}
@@ -1176,7 +1195,7 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
               theme: design.theme,
               showPin: design.authMode === "user_pass" || design.authMode === "user_equals_pass" || design.sameUserPass === true,
               showQr: design.showQr,
-              isPos: currentLayout.id.startsWith('pos'),
+              isPos: gridInfo.isPos || currentLayout.id.startsWith('pos'),
               qrDataUrlMap: qrMap,
               fontScale: gridInfo.fontScale,
               gapMm: gridInfo.gapMm,
@@ -1196,15 +1215,17 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
         onSaveHTML={async () => {
           showToast('جارٍ إنشاء ملف HTML...', 'info');
           try {
-            const qrMap = await preGenerateQrCodes(
-              currentBatchVouchers,
-              design.loginUrl,
-              design.authMode,
-              120,
-              (done, total) => {
-                if (done % 50 === 0) showToast(`توليد QR: ${done}/${total}`, 'info');
-              }
-            );
+            const qrMap = design.showQr
+              ? await preGenerateQrCodes(
+                  currentBatchVouchers,
+                  design.loginUrl,
+                  design.authMode,
+                  120,
+                  (done, total) => {
+                    if (done % 50 === 0) showToast(`توليد QR: ${done}/${total}`, 'info');
+                  }
+                )
+              : new Map<string, string>();
 
             const htmlContent = await generateStandaloneVoucherHtmlAsync({
               vouchers: currentBatchVouchers,
@@ -1218,7 +1239,7 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
               theme: design.theme,
               showPin: design.authMode === "user_pass" || design.authMode === "user_equals_pass" || design.sameUserPass === true,
               showQr: design.showQr,
-              isPos: currentLayout.id.startsWith('pos'),
+              isPos: gridInfo.isPos || currentLayout.id.startsWith('pos'),
               qrDataUrlMap: qrMap,
               fontScale: gridInfo.fontScale,
               gapMm: gridInfo.gapMm,
@@ -1320,7 +1341,9 @@ export function VoucherStudio({ initialUsers }: VoucherStudioProps = {}) {
                 const updated = prev.map(v => ({ ...v, isSynced: true }));
                 try {
                   safeStorage.setItem('zctrl_last_batch_vouchers', JSON.stringify(updated.slice(0, 50)));
-                } catch {}
+                } catch (err) {
+                  console.warn('Could not update cached batch vouchers sync state:', err);
+                }
                 return updated;
               });
               window.dispatchEvent(new CustomEvent('zctrl:vouchers-changed'));

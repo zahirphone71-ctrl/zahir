@@ -16,6 +16,7 @@
 @keyframes neonFlicker { 0%,100% { opacity: 1; text-shadow: 0 0 8px currentColor } 50% { opacity: 0.85; text-shadow: 0 0 16px currentColor, 0 0 24px currentColor } }
 @keyframes spinSlow { to { transform: rotate(360deg) } }
 @keyframes floatY { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-4px) } }
+@keyframes pulseSlow { 0%,100% { opacity: 1 } 50% { opacity: 0.72 } }
 @keyframes zctrl-title { 0% { filter: hue-rotate(0deg) } 50% { filter: hue-rotate(30deg) } 100% { filter: hue-rotate(0deg) } }
 
 /* ═══ حركات تفاعل ═══ */
@@ -77,5 +78,6 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
